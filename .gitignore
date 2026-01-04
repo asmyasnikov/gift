@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Production
+/dist
+/build
+
+# Misc
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Photo folders (большие файлы, не коммитим в git)
+photos/
+tiles/
+
+# Но оставляем структуру для примера (если нужно)
+# !photos/.gitkeep
+# !tiles/.gitkeep
+
+

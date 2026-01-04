@@ -1,0 +1,269 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Playfair Display', serif;
+  background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
+}
+
+.app {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.app::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: 
+    radial-gradient(ellipse at 20% 80%, rgba(120, 100, 200, 0.15) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(200, 150, 100, 0.1) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.title {
+  font-size: clamp(1.5rem, 3vw, 2.5rem);
+  color: rgba(255, 255, 255, 0.9);
+  margin-bottom: 1rem;
+  text-shadow: 0 2px 20px rgba(0, 0, 0, 0.5);
+  letter-spacing: 0.1em;
+  z-index: 1;
+  font-weight: 400;
+}
+
+.mosaic-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  width: 100%;
+}
+
+.mosaic-container {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  box-shadow: 
+    0 25px 80px rgba(0, 0, 0, 0.6),
+    0 10px 30px rgba(0, 0, 0, 0.4);
+  animation: fadeIn 1s ease-out;
+  background: #0a0a0a;
+  max-width: 100vw;
+  max-height: calc(100vh - 120px);
+  /* Фон будет установлен через inline style из основного фото */
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.mosaic-tiles {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+}
+
+.mosaic-tile {
+  position: absolute;
+  overflow: hidden;
+  transition: transform 0.3s ease, z-index 0s;
+  border: 0.5px solid rgba(0, 0, 0, 0.2);
+}
+
+.mosaic-tile:hover {
+  transform: scale(2);
+  z-index: 100;
+  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5);
+}
+
+.mosaic-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  /* Сохраняем пропорции исходного фото */
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+  /* Ориентация уже нормализована при сжатии, не применяем EXIF */
+  image-orientation: none;
+  transform: none;
+}
+
+/* color-overlay удалён - прозрачность теперь на самом изображении */
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 1.2rem;
+  gap: 1.5rem;
+  z-index: 1;
+}
+
+.loading-spinner {
+  width: 60px;
+  height: 60px;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top-color: rgba(255, 255, 255, 0.8);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.progress-info {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.photo-indicator {
+  position: absolute;
+  bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  z-index: 2;
+}
+
+.indicator-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.indicator-dot.active {
+  background: rgba(255, 255, 255, 0.9);
+  transform: scale(1.2);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+}
+
+.indicator-dot:hover {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.indicator-more {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.8rem;
+  margin-left: 0.3rem;
+}
+
+.transition-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #0a0a0a;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.5s ease;
+  z-index: 50;
+}
+
+.transition-overlay.active {
+  opacity: 1;
+}
+
+/* Анимация появления плиток */
+@keyframes tileAppear {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.mosaic-tile {
+  animation: tileAppear 0.5s ease-out;
+  animation-fill-mode: both;
+}
+
+.nav-button {
+  position: relative;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.4);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  z-index: 10;
+  backdrop-filter: blur(10px);
+  flex-shrink: 0;
+}
+
+.nav-button:hover {
+  background: rgba(0, 0, 0, 0.6);
+  border-color: rgba(255, 255, 255, 0.6);
+  color: rgba(255, 255, 255, 1);
+  transform: scale(1.1);
+}
+
+.nav-button:active {
+  transform: scale(0.95);
+}
+
+.nav-button svg {
+  width: 24px;
+  height: 24px;
+}
+
+@media (max-width: 768px) {
+  .nav-button {
+    width: 40px;
+    height: 40px;
+  }
+  
+  .nav-button svg {
+    width: 20px;
+    height: 20px;
+  }
+  
+  .mosaic-wrapper {
+    gap: 0.5rem;
+  }
+}
