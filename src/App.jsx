@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 // Минимальное и максимальное количество тайлов в одном измерении
 const MIN_TILES_PER_DIMENSION = 10; // Минимум 20 тайлов по ширине или высоте
-const MAX_TILES_PER_DIMENSION = 40; // Максимум 80 тайлов по ширине или высоте
+const MAX_TILES_PER_DIMENSION = 20; // Максимум 80 тайлов по ширине или высоте
 // Порог вариации цвета для дробления области
 const VARIANCE_THRESHOLD = 800;
 // Максимальный размер канваса для анализа (по большей стороне)
@@ -21,6 +21,11 @@ const OPACITY_TRANSITION_TILES = 1; // Количество тайлов для 
 // Константы для фильтров изображений
 const IMAGE_BRIGHTNESS = 0.85; // Яркость тайлов (0.0 - темнее, 1.0 - оригинал, >1.0 - ярче)
 const IMAGE_SATURATE = 1.15;   // Насыщенность тайлов (0.0 - ч/б, 1.0 - оригинал, >1.0 - ярче)
+
+// Константа для вариации размера плиток-заполнителей
+// Определяет максимальный разброс размера плиток-заполнителей относительно среднего размера
+// Значение 5 означает, что размер может варьироваться от 0.2x до 1.0x (разброс в 5 раз)
+const BACKGROUND_TILES_SIZE_VARIATION = 5; // Максимальный разброс размера (в разах)
 
 // Загрузка маски для фото
 // Маска - это PNG файл с альфа-каналом, где прозрачные области = области с min opacity
@@ -447,8 +452,10 @@ function App() {
   const [tiles, setTiles] = useState([]);
   const [transitioning, setTransitioning] = useState(false);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const [mainImageSize, setMainImageSize] = useState({ width: 0, height: 0, x: 0, y: 0 });
   const [imageAspectRatio, setImageAspectRatio] = useState(1);
   const [mainImageUrl, setMainImageUrl] = useState(null);
+  const [edgeColors, setEdgeColors] = useState([]);
   const [autoPlay, setAutoPlay] = useState(true);
   const [maskData, setMaskData] = useState(null);
   const [debugMode, setDebugMode] = useState(false);
@@ -647,7 +654,7 @@ function App() {
     return () => clearInterval(checkCanvas);
   }, [photoIndex]);
 
-  // Вычисляем размер контейнера на весь экран с учётом пропорций изображения
+  // Вычисляем размер контейнера фиксированного размера (80% viewport)
   useEffect(() => {
     const updateSize = () => {
       if (debugMode) {
@@ -662,29 +669,20 @@ function App() {
       const availableHeight = vh - headerHeight - indicatorHeight;
       const availableWidth = vw;
 
-      // Вычисляем размер с сохранением пропорций изображения
-      let width, height;
-      
-      if (imageAspectRatio > 1) {
-        // Горизонтальное изображение
-        width = Math.min(availableWidth, availableHeight * imageAspectRatio);
-        height = width / imageAspectRatio;
-      } else {
-        // Вертикальное изображение
-        height = Math.min(availableHeight, availableWidth / imageAspectRatio);
-        width = height * imageAspectRatio;
-      }
+      // Фиксированный размер контейнера - 80% от доступного пространства
+      const containerWidth = availableWidth * 0.8;
+      const containerHeight = availableHeight * 0.8;
 
       if (debugMode) {
-        console.log('[DEBUG] containerSize обновлен:', { width, height, imageAspectRatio });
+        console.log('[DEBUG] containerSize обновлен:', { width: containerWidth, height: containerHeight });
       }
-      setContainerSize({ width, height });
+      setContainerSize({ width: containerWidth, height: containerHeight });
     };
 
     updateSize();
     window.addEventListener('resize', updateSize);
     return () => window.removeEventListener('resize', updateSize);
-  }, [imageAspectRatio, debugMode]);
+  }, [debugMode]);
 
   // Генерируем мозаику
   const generateMosaic = useCallback(async () => {
@@ -726,7 +724,27 @@ function App() {
     // Устанавливаем URL основного фото для фона
     setMainImageUrl(`/photos/${currentPhoto.filename}`);
 
-    // Вычисляем размер canvas с сохранением пропорций
+    // Вычисляем размер главного фото, вписанного в контейнер (contain)
+    const containerAspect = containerSize.width / containerSize.height;
+    let mainImgWidth, mainImgHeight, mainImgX, mainImgY;
+    
+    if (imgAspect > containerAspect) {
+      // Изображение шире - подгоняем по ширине контейнера
+      mainImgWidth = containerSize.width;
+      mainImgHeight = mainImgWidth / imgAspect;
+      mainImgX = 0;
+      mainImgY = (containerSize.height - mainImgHeight) / 2;
+    } else {
+      // Изображение выше - подгоняем по высоте контейнера
+      mainImgHeight = containerSize.height;
+      mainImgWidth = mainImgHeight * imgAspect;
+      mainImgX = (containerSize.width - mainImgWidth) / 2;
+      mainImgY = 0;
+    }
+    
+    setMainImageSize({ width: mainImgWidth, height: mainImgHeight, x: mainImgX, y: mainImgY });
+
+    // Вычисляем размер canvas для анализа главного фото
     let canvasWidth, canvasHeight;
     if (imgAspect > 1) {
       canvasWidth = MAX_CANVAS_SIZE;
@@ -743,8 +761,7 @@ function App() {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-    // Рисуем основное изображение на canvas с сохранением пропорций (cover)
-    // Вычисляем размеры для cover (заполнение всего canvas)
+    // Рисуем основное изображение на canvas с сохранением пропорций (cover для анализа)
     let drawWidth = canvasWidth;
     let drawHeight = canvasHeight;
     let drawX = 0;
@@ -766,14 +783,45 @@ function App() {
 
     ctx.drawImage(mainImage, drawX, drawY, drawWidth, drawHeight);
     const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+    
+    // Получаем цвета краев главного фото для заполнения оставшегося пространства
+    const edgeColorSamples = [];
+    const sampleSize = 20; // Размер области для выборки
+    const samplePositions = [
+      // Верхний край
+      { x: drawX + drawWidth * 0.1, y: drawY, size: drawWidth * 0.8 },
+      { x: drawX + drawWidth * 0.3, y: drawY, size: drawWidth * 0.4 },
+      { x: drawX + drawWidth * 0.5, y: drawY, size: drawWidth * 0.2 },
+      // Нижний край
+      { x: drawX + drawWidth * 0.1, y: drawY + drawHeight, size: drawWidth * 0.8 },
+      { x: drawX + drawWidth * 0.3, y: drawY + drawHeight, size: drawWidth * 0.4 },
+      { x: drawX + drawWidth * 0.5, y: drawY + drawHeight, size: drawWidth * 0.2 },
+      // Левый край
+      { x: drawX, y: drawY + drawHeight * 0.1, size: drawHeight * 0.8 },
+      { x: drawX, y: drawY + drawHeight * 0.3, size: drawHeight * 0.4 },
+      { x: drawX, y: drawY + drawHeight * 0.5, size: drawHeight * 0.2 },
+      // Правый край
+      { x: drawX + drawWidth, y: drawY + drawHeight * 0.1, size: drawHeight * 0.8 },
+      { x: drawX + drawWidth, y: drawY + drawHeight * 0.3, size: drawHeight * 0.4 },
+      { x: drawX + drawWidth, y: drawY + drawHeight * 0.5, size: drawHeight * 0.2 },
+    ];
+    
+    samplePositions.forEach(pos => {
+      const color = getAreaColor(imageData, pos.x, pos.y, pos.size, canvasWidth);
+      edgeColorSamples.push(color);
+    });
+    
+    setEdgeColors(edgeColorSamples);
 
     // Загружаем маску синхронно (если есть)
     // Маска имеет то же имя что и фото, но с расширением PNG
+    // Масштабируем маску до размера главного фото в контейнере
     const baseName = currentPhoto.filename.replace(/\.(jpg|jpeg)$/i, '');
     const maskFilename = `${baseName}.png`;
     let currentMaskData = null;
     try {
-      const mask = await loadMask(maskFilename, canvasWidth, canvasHeight, containerSize);
+      const maskSize = { width: mainImgWidth, height: mainImgHeight };
+      const mask = await loadMask(maskFilename, canvasWidth, canvasHeight, maskSize);
       if (mask && mask.imageData) {
         currentMaskData = mask;
         if (debugMode) {
@@ -806,9 +854,9 @@ function App() {
              isFinite(c.r) && isFinite(c.g) && isFinite(c.b);
     });
 
-    // Масштаб от canvas к контейнеру
-    const scaleX = containerSize.width / canvasWidth;
-    const scaleY = containerSize.height / canvasHeight;
+    // Масштаб от canvas к размеру главного фото в контейнере
+    const scaleX = mainImgWidth / canvasWidth;
+    const scaleY = mainImgHeight / canvasHeight;
 
     // Исключаем текущее главное фото из списка доступных для тайлов
     const currentMainPhotoIndex = images.findIndex(img => img.filename === currentPhoto.filename);
@@ -822,11 +870,12 @@ function App() {
     const usageCount = new Map();
     
     // Вычисляем средний размер тайла для градиента opacity
-    // Используем средний размер узлов quadtree, масштабированный до контейнера
+    // Используем средний размер узлов quadtree, масштабированный до размера главного фото
     const avgNodeSize = leaves.reduce((sum, node) => sum + node.size, 0) / leaves.length;
     const averageTileSize = avgNodeSize * Math.max(scaleX, scaleY);
     
-    const newTiles = leaves.map((node, tileIndex) => {
+    // Генерируем плитки для главного фото
+    const mainImageTiles = leaves.map((node, tileIndex) => {
       // Пропускаем невалидные узлы
       if (!node.avgColor || 
           isNaN(node.avgColor.r) || isNaN(node.avgColor.g) || isNaN(node.avgColor.b)) {
@@ -916,23 +965,26 @@ function App() {
         }
       }
 
-      // Вычисляем центр тайла для определения opacity
-      const tileCenterX = (node.x + tileWidth / 2) * scaleX;
-      const tileCenterY = (node.y + tileHeight / 2) * scaleY;
+      // Вычисляем центр тайла для определения opacity (относительно главного фото)
+      const tileCenterX = mainImgX + (node.x + tileWidth / 2) * scaleX;
+      const tileCenterY = mainImgY + (node.y + tileHeight / 2) * scaleY;
       
       // Вычисляем opacity на основе маски
+      // Координаты относительно главного фото для маски
+      const maskX = tileCenterX - mainImgX;
+      const maskY = tileCenterY - mainImgY;
       const opacity = calculateTileOpacity(
-        tileCenterX,
-        tileCenterY,
-        containerSize.width,
-        containerSize.height,
+        maskX,
+        maskY,
+        mainImgWidth,
+        mainImgHeight,
         currentMaskData,
         averageTileSize
       );
       
       return {
-        x: node.x * scaleX,
-        y: node.y * scaleY,
+        x: mainImgX + node.x * scaleX,
+        y: mainImgY + node.y * scaleY,
         width: tileWidth * scaleX,
         height: tileHeight * scaleY,
         imageIndex: bestIndex,
@@ -942,6 +994,126 @@ function App() {
         opacity,
       };
     }).filter(tile => tile !== null); // Фильтруем null тайлы
+    
+    // Вычисляем средний размер плиток на главном фото
+    const mainTilesAvgSize = mainImageTiles.length > 0
+      ? mainImageTiles.reduce((sum, tile) => sum + Math.sqrt(tile.width * tile.height), 0) / mainImageTiles.length
+      : averageTileSize;
+    
+    // Генерируем плитки для оставшегося пространства контейнера
+    // Используем цвета краев главного фото
+    const backgroundTiles = [];
+    // Базовый размер плитки равен среднему размеру плиток на главном фото
+    const baseTileSize = mainTilesAvgSize;
+    
+    // Определяем области, которые нужно заполнить
+    const emptyAreas = [];
+    
+    // Верхняя область
+    if (mainImgY > 0) {
+      emptyAreas.push({
+        x: 0,
+        y: 0,
+        width: containerSize.width,
+        height: mainImgY
+      });
+    }
+    
+    // Нижняя область
+    if (mainImgY + mainImgHeight < containerSize.height) {
+      emptyAreas.push({
+        x: 0,
+        y: mainImgY + mainImgHeight,
+        width: containerSize.width,
+        height: containerSize.height - (mainImgY + mainImgHeight)
+      });
+    }
+    
+    // Левая область
+    if (mainImgX > 0) {
+      emptyAreas.push({
+        x: 0,
+        y: mainImgY,
+        width: mainImgX,
+        height: mainImgHeight
+      });
+    }
+    
+    // Правая область
+    if (mainImgX + mainImgWidth < containerSize.width) {
+      emptyAreas.push({
+        x: mainImgX + mainImgWidth,
+        y: mainImgY,
+        width: containerSize.width - (mainImgX + mainImgWidth),
+        height: mainImgHeight
+      });
+    }
+    
+    // Заполняем пустые области плитками без зазоров
+    emptyAreas.forEach(area => {
+      // Вычисляем количество плиток на основе базового размера
+      const tilesX = Math.ceil(area.width / baseTileSize);
+      const tilesY = Math.ceil(area.height / baseTileSize);
+      
+      // Вычисляем реальный размер плитки, чтобы заполнить всю область без зазоров
+      const actualTileWidth = area.width / tilesX;
+      const actualTileHeight = area.height / tilesY;
+      
+      for (let ty = 0; ty < tilesY; ty++) {
+        for (let tx = 0; tx < tilesX; tx++) {
+          const x = area.x + tx * actualTileWidth;
+          const y = area.y + ty * actualTileHeight;
+          
+          // Размер плитки точно равен вычисленному размеру
+          let width = actualTileWidth;
+          let height = actualTileHeight;
+          
+          // Для последних плиток в ряду/колонке убеждаемся, что они доходят до края
+          if (tx === tilesX - 1) {
+            width = area.x + area.width - x;
+          }
+          if (ty === tilesY - 1) {
+            height = area.y + area.height - y;
+          }
+          
+          // Пропускаем слишком маленькие плитки
+          if (width < baseTileSize * 0.2 || height < baseTileSize * 0.2) {
+            continue;
+          }
+          
+          // Выбираем случайный цвет из краев главного фото
+          const edgeColor = edgeColorSamples[Math.floor(Math.random() * edgeColorSamples.length)];
+          
+          // Находим лучшее совпадение для этого цвета
+          const bestIndex = findBestMatch(
+            edgeColor,
+            photoColors,
+            usageCount,
+            excludedIndices,
+            5000,
+            { debugMode, tileIndex: mainImageTiles.length + backgroundTiles.length }
+          );
+          
+          usageCount.set(bestIndex, (usageCount.get(bestIndex) || 0) + 1);
+          
+          // Для фоновых плиток всегда используем полный размер без зазоров
+          // Фото будет обрезано через object-fit: cover в CSS
+          backgroundTiles.push({
+            x,
+            y,
+            width: width,  // Всегда используем полную ширину без зазоров
+            height: height, // Всегда используем полную высоту без зазоров
+            imageIndex: bestIndex,
+            avgColor: edgeColor,
+            centerX: x + width / 2,
+            centerY: y + height / 2,
+            opacity: MAX_OPACITY, // Фоновые плитки всегда с максимальной opacity
+          });
+        }
+      }
+    });
+    
+    const newTiles = [...mainImageTiles, ...backgroundTiles];
 
     if (debugMode) {
       console.log('[DEBUG] Мозаика сгенерирована:', {
@@ -1174,27 +1346,8 @@ function App() {
 
   return (
     <div className="app">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', maxWidth: '100vw', padding: '0 20px' }}>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', maxWidth: '100vw', padding: '0 20px' }}>
         <h1 className="title" style={{ margin: 0 }}>С днем рождения, мамочка!</h1>
-        <button
-          onClick={downloadHighRes}
-          disabled={isGeneratingHighRes || tiles.length === 0}
-          style={{
-            padding: '10px 20px',
-            fontSize: '14px',
-            backgroundColor: isGeneratingHighRes ? '#666' : '#4CAF50',
-            color: 'white',
-            border: 'none',
-            borderRadius: '5px',
-            cursor: isGeneratingHighRes || tiles.length === 0 ? 'not-allowed' : 'pointer',
-            opacity: isGeneratingHighRes || tiles.length === 0 ? 0.6 : 1,
-            transition: 'background-color 0.3s ease',
-            fontWeight: 'bold'
-          }}
-          title={isGeneratingHighRes ? 'Генерация...' : 'Скачать в высоком разрешении для печати'}
-        >
-          {isGeneratingHighRes ? '⏳ Генерация...' : '⬇️ Скачать HD'}
-        </button>
       </div>
 
       <div className="mosaic-wrapper">
@@ -1214,12 +1367,26 @@ function App() {
             width: containerSize.width, 
             height: containerSize.height,
             margin: '0 auto',
-            backgroundImage: mainImageUrl ? `url(${mainImageUrl})` : 'none',
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-            backgroundRepeat: 'no-repeat'
+            backgroundColor: '#0a0a0a',
+            position: 'relative'
           }}
         >
+        {mainImageUrl && mainImageSize.width > 0 && (
+          <img
+            src={mainImageUrl}
+            alt="Main photo"
+            className="main-photo"
+            style={{
+              position: 'absolute',
+              left: mainImageSize.x,
+              top: mainImageSize.y,
+              width: mainImageSize.width,
+              height: mainImageSize.height,
+              objectFit: 'contain',
+              zIndex: 1
+            }}
+          />
+        )}
         <div className="mosaic-tiles">
           {tiles.map((tile, index) => (
             <div
@@ -1278,6 +1445,22 @@ function App() {
         {slideshowPhotos.length > 15 && (
           <span className="indicator-more">+{slideshowPhotos.length - 15}</span>
         )}
+        <button
+          onClick={downloadHighRes}
+          disabled={isGeneratingHighRes || tiles.length === 0}
+          style={{
+            marginLeft: '20px',
+            fontSize: '2em',
+            backgroundColor: 'transparent',
+            borderColor: 'transparent',
+            cursor: isGeneratingHighRes || tiles.length === 0 ? 'not-allowed' : 'pointer',
+            opacity: isGeneratingHighRes || tiles.length === 0 ? 0.6 : 1,
+            transition: 'background-color 0.3s ease',
+          }}
+          title={isGeneratingHighRes ? 'Генерация...' : 'Скачать в высоком разрешении для печати'}
+        >
+          {isGeneratingHighRes ? '⏳ Генерация...' : '⬇️'}
+        </button>
       </div>
     </div>
   );
