@@ -456,7 +456,7 @@ function App() {
   const [imageAspectRatio, setImageAspectRatio] = useState(1);
   const [mainImageUrl, setMainImageUrl] = useState(null);
   const [edgeColors, setEdgeColors] = useState([]);
-  const [autoPlay, setAutoPlay] = useState(true);
+  const [autoPlay, setAutoPlay] = useState(false);
   const [maskData, setMaskData] = useState(null);
   const [debugMode, setDebugMode] = useState(false);
   const [isGeneratingHighRes, setIsGeneratingHighRes] = useState(false);
@@ -468,9 +468,8 @@ function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const playParam = params.get('play');
-    if (playParam !== null) {
-      setAutoPlay(playParam === '1');
-    }
+    // Автопроигрывание включается только при play=1
+    setAutoPlay(playParam === '1');
     const debugParam = params.get('debug');
     setDebugMode(debugParam === '1');
   }, []);
