@@ -164,10 +164,8 @@ body {
 }
 
 .photo-indicator {
-  position: absolute;
   bottom: 1.5rem;
   left: 50%;
-  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 0.5rem;
