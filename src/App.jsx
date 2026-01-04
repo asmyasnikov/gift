@@ -653,7 +653,7 @@ function App() {
     return () => clearInterval(checkCanvas);
   }, [photoIndex]);
 
-  // Вычисляем размер контейнера фиксированного размера (80% viewport)
+  // Вычисляем размер контейнера на основе доступного пространства
   useEffect(() => {
     const updateSize = () => {
       if (debugMode) {
@@ -668,9 +668,9 @@ function App() {
       const availableHeight = vh - headerHeight - indicatorHeight;
       const availableWidth = vw;
 
-      // Фиксированный размер контейнера - 80% от доступного пространства
-      const containerWidth = availableWidth * 0.8;
-      const containerHeight = availableHeight * 0.8;
+      // Контейнер занимает всё доступное пространство
+      const containerWidth = availableWidth;
+      const containerHeight = availableHeight;
 
       if (debugMode) {
         console.log('[DEBUG] containerSize обновлен:', { width: containerWidth, height: containerHeight });
@@ -1345,7 +1345,7 @@ function App() {
 
   return (
     <div className="app">
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', maxWidth: '100vw', padding: '0 20px', position: 'relative' }}>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', maxWidth: '100vw', padding: '10px 20px 0 20px', position: 'relative' }}>
         <h1 className="title" style={{ margin: 0, textAlign: 'center', width: '100%' }}>С днем рождения, мамочка!</h1>
       </div>
 
@@ -1363,9 +1363,8 @@ function App() {
         <div
           className="mosaic-container"
           style={{ 
-            width: containerSize.width, 
-            height: containerSize.height,
-            margin: '0 auto',
+            maxWidth: containerSize.width, 
+            maxHeight: containerSize.height,
             backgroundColor: '#0a0a0a',
             position: 'relative'
           }}
