@@ -1346,8 +1346,8 @@ function App() {
 
   return (
     <div className="app">
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', maxWidth: '100vw', padding: '0 20px' }}>
-        <h1 className="title" style={{ margin: 0 }}>С днем рождения, мамочка!</h1>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', maxWidth: '100vw', padding: '0 20px', position: 'relative' }}>
+        <h1 className="title" style={{ margin: 0, textAlign: 'center', width: '100%' }}>С днем рождения, мамочка!</h1>
       </div>
 
       <div className="mosaic-wrapper">
