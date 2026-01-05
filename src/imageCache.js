@@ -109,23 +109,53 @@ class ImageCache {
     }
   }
 
+  // Проверить существование файла на сервере
+  async checkFileExists(url) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 секунды таймаут для проверки
+      
+      const response = await fetch(url, {
+        method: 'HEAD', // Используем HEAD для проверки без загрузки всего файла
+        signal: controller.signal,
+        cache: 'no-cache' // Отключаем кэш браузера для проверки
+      });
+      
+      clearTimeout(timeoutId);
+      return response.ok; // Файл существует если статус 200-299
+    } catch (error) {
+      // Если ошибка сети, считаем что файл не существует
+      return false;
+    }
+  }
+
   // Загрузить изображение с кэшированием
+  // Всегда проверяет существование файла на сервере перед использованием кэша
   async loadImage(url) {
-    // Проверяем кэш (сначала память, потом IndexedDB)
+    // Сначала проверяем существование файла на сервере
+    const fileExists = await this.checkFileExists(url);
+    
+    if (!fileExists) {
+      // Файл не существует - удаляем из кэша если был там
+      await this.remove(url);
+      return null;
+    }
+
+    // Файл существует - проверяем кэш (сначала память, потом IndexedDB)
     const cachedUrl = await this.get(url);
     if (cachedUrl) {
       return cachedUrl;
     }
 
-    // Если в кэше нет, пытаемся загрузить из сети
-    // Но если сервер недоступен, не выбрасываем ошибку, а возвращаем null
+    // Если в кэше нет, загружаем из сети
     try {
       // Создаем AbortController для таймаута (более совместимо)
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 секунд таймаут
       
       const response = await fetch(url, {
-        signal: controller.signal
+        signal: controller.signal,
+        cache: 'no-cache' // Отключаем кэш браузера
       });
       
       clearTimeout(timeoutId);
@@ -156,6 +186,28 @@ class ImageCache {
       // Для других ошибок тоже возвращаем null, а не выбрасываем
       console.warn(`Ошибка загрузки изображения ${url}:`, error.message);
       return null;
+    }
+  }
+
+  // Удалить изображение из кэша
+  async remove(url) {
+    // Удаляем из памяти
+    if (this.memoryCache.has(url)) {
+      const objectUrl = this.memoryCache.get(url);
+      URL.revokeObjectURL(objectUrl);
+      this.memoryCache.delete(url);
+    }
+
+    // Удаляем из IndexedDB
+    await this.init();
+    if (this.db) {
+      try {
+        const transaction = this.db.transaction([this.storeName], 'readwrite');
+        const store = transaction.objectStore(this.storeName);
+        store.delete(url);
+      } catch (error) {
+        console.warn('Ошибка удаления из IndexedDB:', error);
+      }
     }
   }
 

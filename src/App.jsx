@@ -11,7 +11,7 @@ const VARIANCE_THRESHOLD = 800;
 const MAX_CANVAS_SIZE = 512;
 
 // Константы для opacity тайлов
-const MIN_OPACITY = 0.25; // Минимальная прозрачность в центре (лицо/центр кадра)
+const MIN_OPACITY = 0.1; // Минимальная прозрачность в центре (лицо/центр кадра)
 const MAX_OPACITY = 1.0;  // Максимальная прозрачность на краях
 
 // Константа для градиента opacity за пределами маски
@@ -316,13 +316,18 @@ function colorDistance(c1, c2) {
 }
 
 // Находит наиболее подходящее фото по цвету с учетом разнообразия
-function findBestMatch(targetColor, photoColors, usageCount, excludedIndices = new Set(), diversityBonus = 5000, debugInfo = null) {
+function findBestMatch(targetColor, photoColors, usageCount, excludedIndices = new Set(), diversityBonus = 5000, debugInfo = null, availableTileIndices = null) {
   // Сначала находим все кандидаты с их расстояниями
   const candidates = [];
   
   photoColors.forEach((color, index) => {
     // Пропускаем исключенные индексы (например, главное фото)
     if (excludedIndices.has(index)) {
+      return;
+    }
+    
+    // Пропускаем индексы, для которых нет тайла (если передан список доступных)
+    if (availableTileIndices && !availableTileIndices.has(index)) {
       return;
     }
     
@@ -337,8 +342,34 @@ function findBestMatch(targetColor, photoColors, usageCount, excludedIndices = n
     candidates.push({ index, distance, usage, originalDistance });
   });
   
-  // Если нет кандидатов, возвращаем 0 (fallback)
+  // Если нет кандидатов, пытаемся найти любой доступный тайл
   if (candidates.length === 0) {
+    console.warn('[DEBUG] findBestMatch: нет кандидатов!', {
+      targetColor,
+      totalPhotoColors: photoColors.length,
+      excludedIndices: Array.from(excludedIndices),
+      availableTileIndices: availableTileIndices ? Array.from(availableTileIndices) : null,
+      availableTileIndicesSize: availableTileIndices ? availableTileIndices.size : null,
+      debugInfo: debugInfo ? { tileIndex: debugInfo.tileIndex } : null
+    });
+    
+    // Если передан список доступных тайлов, выбираем первый доступный
+    if (availableTileIndices && availableTileIndices.size > 0) {
+      const firstAvailable = Array.from(availableTileIndices).find(idx => !excludedIndices.has(idx));
+      if (firstAvailable !== undefined) {
+        console.log(`[DEBUG] findBestMatch: используем fallback - первый доступный индекс ${firstAvailable}`);
+        return firstAvailable;
+      } else {
+        console.warn('[DEBUG] findBestMatch: все доступные тайлы исключены!', {
+          availableIndices: Array.from(availableTileIndices),
+          excludedIndices: Array.from(excludedIndices)
+        });
+      }
+    } else {
+      console.warn('[DEBUG] findBestMatch: availableTileIndices пуст или не передан!');
+    }
+    // Fallback на 0, если ничего не найдено
+    console.warn(`[DEBUG] findBestMatch: используем fallback - индекс 0`);
     return 0;
   }
   
@@ -473,9 +504,24 @@ function App() {
   const [tileImageUrls, setTileImageUrls] = useState({}); // Кэш URL'ов тайлов (объект для React state)
   const [mainPhotoUrls, setMainPhotoUrls] = useState({}); // Кэш URL'ов главных фото
   const [maskUrls, setMaskUrls] = useState({}); // Кэш URL'ов масок
+  const [availableTileIndices, setAvailableTileIndices] = useState(new Set()); // Индексы фото, для которых есть тайлы
+  const [tilesLoaded, setTilesLoaded] = useState(false); // Флаг, что все тайлы загружены и проверены
 
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
+
+  // Очищаем кэш при загрузке страницы для отображения свежих изменений
+  useEffect(() => {
+    const clearCache = async () => {
+      try {
+        await imageCache.clear();
+        console.log('[DEBUG] Кэш очищен при загрузке страницы');
+      } catch (error) {
+        console.warn('[DEBUG] Ошибка очистки кэша:', error);
+      }
+    };
+    clearCache();
+  }, []); // Выполняется только один раз при монтировании компонента
 
   // Читаем параметры из query string
   useEffect(() => {
@@ -694,6 +740,8 @@ function App() {
     if (!photoIndex) return;
 
     const loadImages = async () => {
+      // Сбрасываем флаг загрузки тайлов при новой загрузке
+      setTilesLoaded(false);
       setLoadingProgress('Загрузка изображений...');
 
       const loadedImages = [];
@@ -717,21 +765,44 @@ function App() {
       // Главные фото могут быть тайлами - для них есть уменьшенные версии в /tiles/
       setLoadingProgress('Предзагрузка тайлов...');
       
-      // Предзагружаем все тайлы из /tiles/ (включая главные фото, у которых есть уменьшенные версии)
-      const tilePromises = photos.map(async (photo) => {
+      // Предзагружаем все тайлы из /tiles/ и проверяем их существование
+      // Создаем Set доступных индексов тайлов
+      const availableIndices = new Set();
+      const missingTiles = [];
+      const tilePromises = photos.map(async (photo, index) => {
         const tileUrl = `/tiles/${photo.filename}`;
-        await imageCache.loadImage(tileUrl); // loadImage обрабатывает ошибки и возвращает null при неудаче
+        const cachedUrl = await imageCache.loadImage(tileUrl); // loadImage возвращает null если файл не найден
+        if (cachedUrl) {
+          // Тайл существует - добавляем индекс в список доступных
+          availableIndices.add(index);
+          if (debugMode) {
+            console.log(`[DEBUG] Тайл найден: index=${index}, filename=${photo.filename}`);
+          }
+        } else {
+          missingTiles.push({ index, filename: photo.filename });
+          if (debugMode) {
+            console.warn(`[DEBUG] Тайл НЕ найден: index=${index}, filename=${photo.filename}, url=${tileUrl}`);
+          }
+        }
       });
       
       // Ждем завершения загрузки всех тайлов
       await Promise.all(tilePromises);
       
-      if (debugMode) {
-        console.log('[DEBUG] Все тайлы предзагружены', {
-          totalPhotos: photos.length,
-          tilesPreloaded: tilePromises.length
-        });
-      }
+      // Сохраняем список доступных индексов тайлов
+      setAvailableTileIndices(availableIndices);
+      
+      // Устанавливаем флаг, что все тайлы загружены и проверены
+      setTilesLoaded(true);
+      
+      console.log('[DEBUG] Все тайлы предзагружены и проверены', {
+        totalPhotos: photos.length,
+        tilesPreloaded: tilePromises.length,
+        availableTiles: availableIndices.size,
+        missingTiles: photos.length - availableIndices.size,
+        availableIndices: Array.from(availableIndices).sort((a, b) => a - b),
+        missingTilesList: missingTiles.map(t => `${t.index}:${t.filename}`)
+      });
       
       setLoadingProgress('Готово!');
       setLoading(false);
@@ -835,14 +906,28 @@ function App() {
 
   // Генерируем мозаику
   const generateMosaic = useCallback(async () => {
-    if (images.length === 0 || slideshowPhotos.length === 0 || !containerSize.width) return;
+    // Не генерируем мозаику, если тайлы еще не загружены и проверены
+    if (images.length === 0 || slideshowPhotos.length === 0 || !containerSize.width || !tilesLoaded || availableTileIndices.size === 0) {
+      if (debugMode) {
+        console.log('[DEBUG] generateMosaic пропущен:', {
+          imagesLength: images.length,
+          slideshowPhotosLength: slideshowPhotos.length,
+          containerWidth: containerSize.width,
+          tilesLoaded,
+          availableTilesCount: availableTileIndices.size
+        });
+      }
+      return;
+    }
     
     if (debugMode) {
       console.log('[DEBUG] generateMosaic вызван', {
         imagesCount: images.length,
         slideshowPhotosCount: slideshowPhotos.length,
         containerSize,
-        currentMainIndex
+        currentMainIndex,
+        availableTilesCount: availableTileIndices.size,
+        tilesLoaded
       });
     }
 
@@ -1103,7 +1188,8 @@ function App() {
         usageCount, 
         excludedIndices, 
         edgeDiversityBonus,
-        { debugMode, tileIndex }
+        { debugMode, tileIndex },
+        availableTileIndices
       );
       
       // Увеличиваем счетчик использования
@@ -1372,7 +1458,8 @@ function App() {
             usageCount,
             excludedIndices,
             5000,
-            { debugMode, tileIndex: mainImageTiles.length + backgroundTiles.length }
+            { debugMode, tileIndex: mainImageTiles.length + backgroundTiles.length },
+            availableTileIndices
           );
           
           usageCount.set(bestIndex, (usageCount.get(bestIndex) || 0) + 1);
@@ -1395,6 +1482,29 @@ function App() {
     });
     
     const newTiles = [...mainImageTiles, ...backgroundTiles];
+
+    // Проверяем, что все индексы тайлов есть в availableTileIndices
+    const usedIndices = new Set(newTiles.map(tile => tile.imageIndex));
+    const missingIndices = Array.from(usedIndices).filter(idx => !availableTileIndices.has(idx));
+    
+    console.log('[DEBUG] Мозаика сгенерирована - проверка индексов:', {
+      totalTiles: newTiles.length,
+      uniqueImageIndices: usedIndices.size,
+      usedIndices: Array.from(usedIndices).sort((a, b) => a - b),
+      availableTileIndices: Array.from(availableTileIndices).sort((a, b) => a - b),
+      missingIndices: missingIndices.length > 0 ? missingIndices : 'Нет проблемных индексов',
+      excludedIndices: Array.from(excludedIndices)
+    });
+    
+    if (missingIndices.length > 0) {
+      console.error('[DEBUG] ОШИБКА: Найдены тайлы с индексами, которых нет в availableTileIndices!', {
+        missingIndices,
+        tilesWithMissingIndices: newTiles.filter(tile => missingIndices.includes(tile.imageIndex)).map(tile => ({
+          imageIndex: tile.imageIndex,
+          filename: images[tile.imageIndex]?.filename
+        }))
+      });
+    }
 
     if (debugMode) {
       // Проверяем покрытие области основного изображения тайлами
@@ -1508,64 +1618,104 @@ function App() {
     setMaskData(currentMaskData);
     
     setTiles(newTiles);
-  }, [images, photoColors, photoAspects, slideshowPhotos, currentMainIndex, containerSize, debugMode, mainPhotoUrls, maskUrls]);
+  }, [images, photoColors, photoAspects, slideshowPhotos, currentMainIndex, containerSize, debugMode, mainPhotoUrls, maskUrls, availableTileIndices, tilesLoaded]);
 
   // Регенерируем мозаику при смене параметров
+  // Генерируем мозаику только после загрузки и проверки всех тайлов
   useEffect(() => {
     if (debugMode) {
       console.log('[DEBUG] useEffect для generateMosaic:', {
         loading,
+        tilesLoaded,
         containerSize,
-        currentMainIndex
+        currentMainIndex,
+        availableTilesCount: availableTileIndices.size
       });
     }
-    if (!loading && containerSize.width > 0) {
+    // Ждем завершения загрузки и проверяем, что тайлы загружены и проверены
+    if (!loading && tilesLoaded && containerSize.width > 0 && availableTileIndices.size > 0) {
       generateMosaic();
       // Сбрасываем активный тайл при смене слайда
       setHoveredTileIndex(null);
     }
-  }, [loading, currentMainIndex, generateMosaic, containerSize, debugMode]);
+  }, [loading, tilesLoaded, currentMainIndex, generateMosaic, containerSize, debugMode, availableTileIndices]);
 
   // Предзагружаем тайлы через кэш при изменении tiles
+  // Загружаем только те тайлы, которые существуют (проверяем через availableTileIndices)
+  // Ждем, пока все тайлы будут проверены (tilesLoaded)
   useEffect(() => {
-    if (tiles.length === 0 || images.length === 0) return;
+    if (tiles.length === 0 || images.length === 0 || !tilesLoaded || availableTileIndices.size === 0) return;
 
     const loadTiles = async () => {
       const newUrls = {};
       const uniqueImageIndices = new Set(tiles.map(tile => tile.imageIndex));
+      const skippedIndices = [];
+      const failedIndices = [];
+      const loadedIndices = [];
+      
+      console.log('[DEBUG] Начинаем загрузку тайлов для рендеринга:', {
+        totalTiles: tiles.length,
+        uniqueImageIndices: Array.from(uniqueImageIndices).sort((a, b) => a - b),
+        availableTileIndices: Array.from(availableTileIndices).sort((a, b) => a - b)
+      });
       
       // Загружаем все уникальные тайлы через кэш
-      // Главные фото могут быть тайлами - для них есть уменьшенные версии в /tiles/
+      // Проверяем, что тайл существует в availableTileIndices перед загрузкой
       const loadPromises = Array.from(uniqueImageIndices).map(async (imageIndex) => {
+        // Пропускаем тайлы, которых нет в списке доступных
+        if (!availableTileIndices.has(imageIndex)) {
+          skippedIndices.push(imageIndex);
+          console.warn(`[DEBUG] Пропуск тайла ${imageIndex} (${images[imageIndex]?.filename}) - не найден в availableTileIndices`);
+          return;
+        }
+        
         const image = images[imageIndex];
-        if (!image || !image.filename) return;
+        if (!image || !image.filename) {
+          console.warn(`[DEBUG] Пропуск тайла ${imageIndex} - нет информации об изображении`);
+          return;
+        }
         
         const tileUrl = `/tiles/${image.filename}`;
         
-        // loadImage теперь возвращает null вместо выброса ошибки
+        // loadImage возвращает null если файл не найден
         const cachedUrl = await imageCache.loadImage(tileUrl);
         if (cachedUrl) {
           newUrls[imageIndex] = cachedUrl;
+          loadedIndices.push(imageIndex);
+          if (debugMode) {
+            console.log(`[DEBUG] Тайл загружен: index=${imageIndex}, filename=${image.filename}`);
+          }
         } else {
-          // Fallback на прямой URL если кэш не работает или сервер недоступен
-          newUrls[imageIndex] = tileUrl;
+          // Если тайл не загрузился, не добавляем его (не используем fallback)
+          failedIndices.push({ index: imageIndex, filename: image.filename, url: tileUrl });
+          console.warn(`[DEBUG] Тайл не загружен: ${tileUrl} (imageIndex: ${imageIndex}, filename: ${image.filename})`);
         }
       });
       
       await Promise.all(loadPromises);
       setTileImageUrls(newUrls);
       
-      if (debugMode) {
-        console.log('[DEBUG] Тайлы загружены через кэш:', {
-          totalTiles: tiles.length,
-          uniqueImages: uniqueImageIndices.size,
-          cachedUrls: Object.keys(newUrls).length
+      console.log('[DEBUG] Тайлы загружены через кэш:', {
+        totalTiles: tiles.length,
+        uniqueImages: uniqueImageIndices.size,
+        availableTiles: Array.from(uniqueImageIndices).filter(idx => availableTileIndices.has(idx)).length,
+        loadedTiles: loadedIndices.length,
+        cachedUrls: Object.keys(newUrls).length,
+        skippedIndices: skippedIndices.length > 0 ? skippedIndices : 'Нет пропущенных',
+        failedIndices: failedIndices.length > 0 ? failedIndices : 'Нет неудачных',
+        loadedIndices: loadedIndices.sort((a, b) => a - b)
+      });
+      
+      if (skippedIndices.length > 0 || failedIndices.length > 0) {
+        console.error('[DEBUG] ПРОБЛЕМЫ при загрузке тайлов:', {
+          skippedIndices,
+          failedIndices
         });
       }
     };
 
     loadTiles();
-  }, [tiles, images, debugMode]);
+  }, [tiles, images, availableTileIndices, tilesLoaded, debugMode]);
 
   // Автоматическая смена основного фото каждые 5 секунд (только если autoPlay = true)
   useEffect(() => {
@@ -1983,7 +2133,46 @@ function App() {
             }
           }}
         >
-          {tiles.map((tile, index) => {
+          {(() => {
+            // Собираем статистику о пропущенных тайлах
+            const skippedTiles = [];
+            const renderedTiles = [];
+            
+            const tilesToRender = tiles.map((tile, index) => {
+              // Пропускаем тайлы, для которых нет загруженного URL
+              const tileUrl = tileImageUrls[tile.imageIndex];
+              if (!tileUrl) {
+                skippedTiles.push({
+                  tileIndex: index,
+                  imageIndex: tile.imageIndex,
+                  filename: images[tile.imageIndex]?.filename,
+                  position: { x: tile.x, y: tile.y, width: tile.width, height: tile.height }
+                });
+                console.warn(`[DEBUG] Пропуск рендеринга тайла ${index} - нет URL для imageIndex ${tile.imageIndex} (${images[tile.imageIndex]?.filename})`);
+                return null;
+              }
+              
+              renderedTiles.push({
+                tileIndex: index,
+                imageIndex: tile.imageIndex,
+                filename: images[tile.imageIndex]?.filename
+              });
+              
+              return { tile, index, tileUrl };
+            }).filter(item => item !== null);
+            
+            // Логируем статистику только если есть пропущенные тайлы
+            if (skippedTiles.length > 0) {
+              console.error('[DEBUG] Статистика рендеринга тайлов:', {
+                totalTiles: tiles.length,
+                renderedTiles: renderedTiles.length,
+                skippedTiles: skippedTiles.length,
+                skippedTilesDetails: skippedTiles
+              });
+            }
+            
+            return tilesToRender.map(({ tile, index, tileUrl }) => {
+            
             const isActive = hoveredTileIndex === index;
             const tileKey = `${currentMainIndex}-${index}`;
             return (
@@ -2009,9 +2198,16 @@ function App() {
                 }}
               >
                 <img
-                  src={tileImageUrls[tile.imageIndex] || `/tiles/${images[tile.imageIndex]?.filename}`}
+                  src={tileUrl}
                   alt=""
                   loading="lazy"
+                  onError={(e) => {
+                    // Если изображение не загрузилось, скрываем его
+                    if (debugMode) {
+                      console.warn(`[DEBUG] Ошибка загрузки изображения тайла ${index}:`, tileUrl);
+                    }
+                    e.target.style.display = 'none';
+                  }}
                   style={{
                     opacity: isActive ? 1 : (tile.opacity || MIN_OPACITY),
                     filter: debugMode 
@@ -2026,7 +2222,8 @@ function App() {
                 />
               </div>
             );
-          })}
+            });
+          })()}
         </div>
 
         <div className={`transition-overlay ${transitioning ? 'active' : ''}`} />
