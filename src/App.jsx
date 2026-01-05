@@ -748,17 +748,44 @@ function App() {
   }, [photoIndex, debugMode]);
 
   // Вычисляем размер контейнера на основе доступного пространства
+  // Используем visualViewport API для точного определения размера на мобильных устройствах
   useEffect(() => {
     const updateSize = () => {
       if (debugMode) {
         console.log('[DEBUG] updateSize вызван');
       }
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
+      
+      // Используем visualViewport API если доступен (для точного размера на мобильных, особенно iPhone)
+      // visualViewport дает реальный размер видимой области, учитывая адресную строку браузера
+      let vw, vh;
+      
+      if (window.visualViewport) {
+        vw = window.visualViewport.width;
+        vh = window.visualViewport.height;
+        
+        if (debugMode) {
+          console.log('[DEBUG] Используется visualViewport:', { 
+            width: vw, 
+            height: vh,
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            scale: window.visualViewport.scale
+          });
+        }
+      } else {
+        // Fallback на стандартные методы
+        vw = window.innerWidth;
+        vh = window.innerHeight;
+        
+        if (debugMode) {
+          console.log('[DEBUG] Используется window.innerWidth/Height:', { width: vw, height: vh });
+        }
+      }
 
       // Оставляем место для заголовка и индикаторов
-      const headerHeight = 80;
-      const indicatorHeight = 40;
+      // Заголовок: padding-top (10px) + font-size (до 2.5rem = 40px) + margin-bottom (1rem = 16px) + небольшой запас
+      const headerHeight = 100; // Увеличено для учета реальной высоты заголовка
+      const indicatorHeight = 50; // Увеличено для учета отступов
       const availableHeight = vh - headerHeight - indicatorHeight;
       
       // Оставляем место для стрелок навигации (ширина стрелки + gap с обеих сторон)
@@ -774,13 +801,34 @@ function App() {
       const containerHeight = availableHeight;
 
       if (debugMode) {
-        console.log('[DEBUG] containerSize обновлен:', { width: containerWidth, height: containerHeight });
+        console.log('[DEBUG] containerSize обновлен:', { 
+          width: containerWidth, 
+          height: containerHeight,
+          viewport: { width: vw, height: vh },
+          available: { width: availableWidth, height: availableHeight }
+        });
       }
       setContainerSize({ width: containerWidth, height: containerHeight });
     };
 
     updateSize();
+    
+    // Обработчики для обновления размера
     window.addEventListener('resize', updateSize);
+    
+    // visualViewport события для мобильных устройств (особенно iPhone)
+    // Эти события срабатывают при изменении размера видимой области (скрытие/появление адресной строки)
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', updateSize);
+      window.visualViewport.addEventListener('scroll', updateSize);
+      
+      return () => {
+        window.removeEventListener('resize', updateSize);
+        window.visualViewport.removeEventListener('resize', updateSize);
+        window.visualViewport.removeEventListener('scroll', updateSize);
+      };
+    }
+    
     return () => window.removeEventListener('resize', updateSize);
   }, [debugMode]);
 
@@ -1794,7 +1842,7 @@ function App() {
 
   return (
     <div className="app">
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', maxWidth: '100vw', padding: '10px 20px 0 20px', position: 'relative' }}>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', maxWidth: '100vw', padding: '10px 20px 0 20px', position: 'relative', zIndex: 10 }}>
         <h1 className="title" style={{ margin: 0, textAlign: 'center', width: '100%' }}>С днем рождения, мамочка!</h1>
       </div>
 

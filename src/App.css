@@ -46,8 +46,9 @@ body {
   margin-bottom: 1rem;
   text-shadow: 0 2px 20px rgba(0, 0, 0, 0.5);
   letter-spacing: 0.1em;
-  z-index: 1;
+  z-index: 10;
   font-weight: 400;
+  position: relative;
 }
 
 .mosaic-wrapper {
@@ -180,12 +181,15 @@ body {
 }
 
 .photo-indicator {
-  bottom: 1.5rem;
-  left: 50%;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
   z-index: 2;
+  width: 100%;
+  /* Размещаем внизу flex-контейнера */
+  margin-top: auto;
+  padding-bottom: 1.5rem;
 }
 
 .indicator-dot {
