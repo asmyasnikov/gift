@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import imageCache from './imageCache';
+import { config } from '@/config.js';
 
 // Минимальное и максимальное количество тайлов в одном измерении
 const MIN_TILES_PER_DIMENSION = 10; // Минимум 20 тайлов по ширине или высоте
@@ -1843,7 +1844,7 @@ function App() {
   return (
     <div className="app">
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', maxWidth: '100vw', padding: '10px 20px 0 20px', position: 'relative', zIndex: 10 }}>
-        <h1 className="title" style={{ margin: 0, textAlign: 'center', width: '100%' }}>С днем рождения, мамочка!</h1>
+        <h1 className="title" style={{ margin: 0, textAlign: 'center', width: '100%' }}>{config.title}</h1>
       </div>
 
       <div className="mosaic-wrapper">

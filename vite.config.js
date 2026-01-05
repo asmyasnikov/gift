@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { copyFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'fs'
-import { join } from 'path'
+import { join, resolve } from 'path'
 
 // Простой плагин для копирования папок
 function copyFolderPlugin() {
@@ -110,6 +110,11 @@ export default defineConfig({
     react(),
     copyFolderPlugin()
   ],
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, '.'),
+    },
+  },
   server: {
     port: 3000,
     open: true
