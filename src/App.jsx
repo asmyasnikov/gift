@@ -1215,14 +1215,6 @@ function App() {
       // Для плаката A2 (16.5x23.4 дюйма) при 300 DPI = 4950x7020 пикселей
       // Используем коэффициент 4x от текущего размера для баланса качества и размера файла
       const scaleFactor = 4;
-      const highResWidth = Math.round(containerSize.width * scaleFactor);
-      const highResHeight = Math.round(containerSize.height * scaleFactor);
-      
-      // Создаем canvas для высокого разрешения
-      const highResCanvas = document.createElement('canvas');
-      highResCanvas.width = highResWidth;
-      highResCanvas.height = highResHeight;
-      const highResCtx = highResCanvas.getContext('2d');
       
       // Загружаем основное фото в высоком разрешении
       const mainImg = new Image();
@@ -1234,8 +1226,28 @@ function App() {
         mainImg.src = mainImageUrl;
       });
       
-      // Рисуем фон (основное фото)
-      highResCtx.drawImage(mainImg, 0, 0, highResWidth, highResHeight);
+      // Вычисляем пропорции основного изображения
+      const imgAspect = mainImg.naturalWidth / mainImg.naturalHeight;
+      
+      // Используем размер основного изображения в контейнере (mainImageSize) для правильного масштабирования
+      // Масштабируем mainImageSize с сохранением пропорций
+      const mainImgWidth = mainImageSize.width * scaleFactor;
+      const mainImgHeight = mainImageSize.height * scaleFactor;
+      const mainImgX = mainImageSize.x * scaleFactor;
+      const mainImgY = mainImageSize.y * scaleFactor;
+      
+      // Размер canvas равен размеру контейнера, масштабированному
+      const canvasWidth = Math.round(containerSize.width * scaleFactor);
+      const canvasHeight = Math.round(containerSize.height * scaleFactor);
+      
+      // Создаем canvas для высокого разрешения
+      const highResCanvas = document.createElement('canvas');
+      highResCanvas.width = canvasWidth;
+      highResCanvas.height = canvasHeight;
+      const highResCtx = highResCanvas.getContext('2d');
+      
+      // Рисуем фон (основное фото) с сохранением пропорций в том же месте, где оно находится в контейнере
+      highResCtx.drawImage(mainImg, mainImgX, mainImgY, mainImgWidth, mainImgHeight);
       
       // Загружаем и рисуем все тайлы
       const tilePromises = tiles.map(async (tile, index) => {
@@ -1245,6 +1257,7 @@ function App() {
         return new Promise((resolve) => {
           tileImg.onload = () => {
             // Масштабируем координаты и размеры тайла
+            // Используем scaleFactor для масштабирования относительно контейнера
             const x = tile.x * scaleFactor;
             const y = tile.y * scaleFactor;
             const width = tile.width * scaleFactor;
@@ -1285,24 +1298,74 @@ function App() {
       // Ждем загрузки всех тайлов
       await Promise.all(tilePromises);
       
+      // Вспомогательная функция для скачивания blob
+      const downloadBlob = (blob, filename) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.style.position = 'fixed';
+        a.style.top = '-9999px';
+        a.style.left = '-9999px';
+        document.body.appendChild(a);
+        
+        // Используем requestAnimationFrame для надежности
+        requestAnimationFrame(() => {
+          a.click();
+          // Удаляем ссылку после небольшой задержки
+          setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }, 100);
+        });
+      };
+      
       // Конвертируем canvas в blob и скачиваем
       highResCanvas.toBlob((blob) => {
         if (blob) {
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
           const currentPhoto = slideshowPhotos[currentMainIndex];
           const filename = currentPhoto 
-            ? `mosaic-${currentPhoto.filename.replace(/\.(jpg|jpeg)$/i, '')}-${highResWidth}x${highResHeight}.png`
-            : `mosaic-${highResWidth}x${highResHeight}.png`;
+            ? `mosaic-${currentPhoto.filename.replace(/\.(jpg|jpeg)$/i, '')}-${canvasWidth}x${canvasHeight}.png`
+            : `mosaic-${canvasWidth}x${canvasHeight}.png`;
           
-          a.href = url;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
+          // Проверяем, является ли это мобильным устройством
+          const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+          
+          if (isMobile) {
+            // Для мобильных устройств используем более надежный метод
+            // Пробуем использовать File System Access API или fallback на стандартный метод
+            if ('showSaveFilePicker' in window) {
+              // Используем File System Access API (поддерживается в современных браузерах)
+              window.showSaveFilePicker({
+                suggestedName: filename,
+                types: [{
+                  description: 'PNG Image',
+                  accept: { 'image/png': ['.png'] }
+                }]
+              }).then(async (fileHandle) => {
+                const writable = await fileHandle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+                setIsGeneratingHighRes(false);
+              }).catch((err) => {
+                console.error('Ошибка сохранения файла:', err);
+                // Fallback на стандартный метод
+                downloadBlob(blob, filename);
+                setIsGeneratingHighRes(false);
+              });
+            } else {
+              // Fallback: используем стандартный метод с улучшениями для мобильных
+              downloadBlob(blob, filename);
+              setIsGeneratingHighRes(false);
+            }
+          } else {
+            // Для десктопа используем стандартный метод
+            downloadBlob(blob, filename);
+            setIsGeneratingHighRes(false);
+          }
+        } else {
+          setIsGeneratingHighRes(false);
         }
-        setIsGeneratingHighRes(false);
       }, 'image/png', 1.0); // Максимальное качество PNG
       
     } catch (error) {
