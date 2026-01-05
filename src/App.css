@@ -64,7 +64,7 @@ body {
 .mosaic-container {
   position: relative;
   z-index: 1;
-  overflow: hidden;
+  overflow: visible;
   box-shadow: 
     0 25px 80px rgba(0, 0, 0, 0.6),
     0 10px 30px rgba(0, 0, 0, 0.4);
@@ -107,14 +107,34 @@ body {
 .mosaic-tile {
   position: absolute;
   overflow: hidden;
-  transition: transform 0.3s ease, z-index 0s;
+  transition: transform 0.3s ease, z-index 0.3s ease;
   border: 0.5px solid rgba(0, 0, 0, 0.2);
+  transform-origin: center center;
+  cursor: pointer;
+  will-change: transform;
 }
 
-.mosaic-tile:hover {
-  transform: scale(2);
-  z-index: 100;
+.mosaic-tile:hover,
+.mosaic-tile.active {
+  overflow: visible !important;
+  transform: scale(var(--tile-hover-scale, 2)) !important;
+  z-index: 100 !important;
   box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5);
+}
+
+/* Для мобильных устройств используем active класс вместо hover */
+@media (hover: none) and (pointer: coarse) {
+  .mosaic-tile:hover {
+    transform: none !important;
+    box-shadow: none;
+  }
+  
+  .mosaic-tile.active {
+    transform: scale(var(--tile-hover-scale, 2)) !important;
+    z-index: 100 !important;
+    overflow: visible !important;
+    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5);
+  }
 }
 
 .mosaic-tile img {

@@ -27,6 +27,9 @@ const IMAGE_SATURATE = 1.15;   // Насыщенность тайлов (0.0 - �
 // Значение 5 означает, что размер может варьироваться от 0.2x до 1.0x (разброс в 5 раз)
 const BACKGROUND_TILES_SIZE_VARIATION = 5; // Максимальный разброс размера (в разах)
 
+// Константа для увеличения тайла при наведении/клике
+const TILE_HOVER_SCALE = 5; // Масштаб увеличения тайла (1.0 = без увеличения, 2.0 = в 2 раза, и т.д.)
+
 // Загрузка маски для фото
 // Маска - это PNG файл с альфа-каналом, где прозрачные области = области с min opacity
 async function loadMask(maskFilename, canvasWidth, canvasHeight, containerSize) {
@@ -460,6 +463,7 @@ function App() {
   const [maskData, setMaskData] = useState(null);
   const [debugMode, setDebugMode] = useState(false);
   const [isGeneratingHighRes, setIsGeneratingHighRes] = useState(false);
+  const [hoveredTileIndex, setHoveredTileIndex] = useState(null);
 
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
@@ -1141,6 +1145,8 @@ function App() {
     }
     if (!loading && containerSize.width > 0) {
       generateMosaic();
+      // Сбрасываем активный тайл при смене слайда
+      setHoveredTileIndex(null);
     }
   }, [loading, currentMainIndex, generateMosaic, containerSize, debugMode]);
 
@@ -1385,36 +1391,62 @@ function App() {
             }}
           />
         )}
-        <div className="mosaic-tiles">
-          {tiles.map((tile, index) => (
-            <div
-              key={`${currentMainIndex}-${index}`}
-              className="mosaic-tile"
-              style={{
-                left: tile.x,
-                top: tile.y,
-                width: tile.width,
-                height: tile.height,
-              }}
-            >
-              <img
-                src={`/tiles/${images[tile.imageIndex]?.filename}`}
-                alt=""
-                loading="lazy"
+        <div 
+          className="mosaic-tiles"
+          style={{
+            '--tile-hover-scale': TILE_HOVER_SCALE,
+          }}
+          onClick={(e) => {
+            // Сбрасываем активный тайл при клике вне тайла (только для мобильных)
+            if (e.target === e.currentTarget && hoveredTileIndex !== null) {
+              setHoveredTileIndex(null);
+            }
+          }}
+        >
+          {tiles.map((tile, index) => {
+            const isActive = hoveredTileIndex === index;
+            const tileKey = `${currentMainIndex}-${index}`;
+            return (
+              <div
+                key={tileKey}
+                className={`mosaic-tile ${isActive ? 'active' : ''}`}
                 style={{
-                  opacity: tile.opacity || MIN_OPACITY,
-                  filter: debugMode 
-                    ? 'brightness(0) contrast(1)' // Черные прямоугольники в режиме отладки
-                    : `brightness(${IMAGE_BRIGHTNESS}) saturate(${IMAGE_SATURATE})`,
-                  transition: 'opacity 0.3s ease',
-                  ...(debugMode && {
-                    border: '1px solid rgba(255, 255, 255, 0.3)', // Белая рамка для визуализации
-                    boxSizing: 'border-box'
-                  })
+                  left: tile.x,
+                  top: tile.y,
+                  width: tile.width,
+                  height: tile.height,
                 }}
-              />
-            </div>
-          ))}
+                onMouseEnter={() => setHoveredTileIndex(index)}
+                onMouseLeave={() => setHoveredTileIndex(null)}
+                onClick={(e) => {
+                  e.stopPropagation(); // Предотвращаем всплытие события
+                  // Для мобильных устройств переключаем состояние по клику
+                  if (hoveredTileIndex === index) {
+                    setHoveredTileIndex(null);
+                  } else {
+                    setHoveredTileIndex(index);
+                  }
+                }}
+              >
+                <img
+                  src={`/tiles/${images[tile.imageIndex]?.filename}`}
+                  alt=""
+                  loading="lazy"
+                  style={{
+                    opacity: isActive ? 1 : (tile.opacity || MIN_OPACITY),
+                    filter: debugMode 
+                      ? 'brightness(0) contrast(1)' // Черные прямоугольники в режиме отладки
+                      : `brightness(${IMAGE_BRIGHTNESS}) saturate(${IMAGE_SATURATE})`,
+                    transition: 'opacity 0.3s ease',
+                    ...(debugMode && {
+                      border: '1px solid rgba(255, 255, 255, 0.3)', // Белая рамка для визуализации
+                      boxSizing: 'border-box'
+                    })
+                  }}
+                />
+              </div>
+            );
+          })}
         </div>
 
         <div className={`transition-overlay ${transitioning ? 'active' : ''}`} />
