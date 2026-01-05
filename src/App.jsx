@@ -670,9 +670,16 @@ function App() {
       const headerHeight = 80;
       const indicatorHeight = 40;
       const availableHeight = vh - headerHeight - indicatorHeight;
-      const availableWidth = vw;
+      
+      // Оставляем место для стрелок навигации (ширина стрелки + gap с обеих сторон)
+      // На мобильных устройствах кнопки меньше (40px) и gap меньше (8px)
+      const isMobile = vw <= 768;
+      const navButtonWidth = isMobile ? 40 : 50; // Ширина кнопки навигации
+      const navGap = isMobile ? 8 : 16; // gap между стрелками и контейнером (0.5rem на мобильных, 1rem на десктопе)
+      const navButtonsSpace = (navButtonWidth + navGap) * 2; // Место для обеих стрелок и gap
+      const availableWidth = vw - navButtonsSpace;
 
-      // Контейнер занимает всё доступное пространство
+      // Контейнер занимает доступное пространство с учетом стрелок
       const containerWidth = availableWidth;
       const containerHeight = availableHeight;
 
@@ -1369,8 +1376,8 @@ function App() {
         <div
           className="mosaic-container"
           style={{ 
-            maxWidth: containerSize.width, 
-            maxHeight: containerSize.height,
+            width: containerSize.width,
+            height: containerSize.height,
             backgroundColor: '#0a0a0a',
             position: 'relative'
           }}
@@ -1395,6 +1402,9 @@ function App() {
           className="mosaic-tiles"
           style={{
             '--tile-hover-scale': TILE_HOVER_SCALE,
+            width: containerSize.width,
+            height: containerSize.height,
+            overflow: hoveredTileIndex !== null ? 'visible' : 'hidden',
           }}
           onClick={(e) => {
             // Сбрасываем активный тайл при клике вне тайла (только для мобильных)
