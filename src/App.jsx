@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import imageCache from './imageCache';
 
 // Минимальное и максимальное количество тайлов в одном измерении
 const MIN_TILES_PER_DIMENSION = 10; // Минимум 20 тайлов по ширине или высоте
@@ -32,15 +33,18 @@ const TILE_HOVER_SCALE = 5; // Масштаб увеличения тайла (1
 
 // Загрузка маски для фото
 // Маска - это PNG файл с альфа-каналом, где прозрачные области = области с min opacity
-async function loadMask(maskFilename, canvasWidth, canvasHeight, containerSize) {
+async function loadMask(maskFilename, canvasWidth, canvasHeight, containerSize, maskUrl = null) {
   try {
     const maskImg = new Image();
     maskImg.crossOrigin = 'anonymous';
     
+    // Используем переданный URL или формируем стандартный
+    const url = maskUrl || `/photos/${maskFilename}`;
+    
     await new Promise((resolve, reject) => {
       maskImg.onload = resolve;
       maskImg.onerror = reject;
-      maskImg.src = `/photos/${maskFilename}`;
+      maskImg.src = url;
     });
     
     // Создаём canvas для маски с размером контейнера
@@ -235,8 +239,9 @@ function buildQuadtree(imageData, canvasWidth, canvasHeight) {
   const minTileSize = Math.min(canvasWidth, canvasHeight) / MAX_TILES_PER_DIMENSION;
   const maxTileSize = Math.min(canvasWidth, canvasHeight) / MIN_TILES_PER_DIMENSION;
   
-  // Используем квадратный корень для Quadtree (работает с квадратными узлами)
-  const rootSize = Math.max(canvasWidth, canvasHeight);
+  // Используем размер, который гарантированно покрывает весь canvas
+  // Округляем до ближайшей степени двойки для правильного деления
+  const rootSize = Math.pow(2, Math.ceil(Math.log2(Math.max(canvasWidth, canvasHeight))));
   const root = new QuadNode(0, 0, rootSize);
   const queue = [root];
 
@@ -464,6 +469,9 @@ function App() {
   const [debugMode, setDebugMode] = useState(false);
   const [isGeneratingHighRes, setIsGeneratingHighRes] = useState(false);
   const [hoveredTileIndex, setHoveredTileIndex] = useState(null);
+  const [tileImageUrls, setTileImageUrls] = useState({}); // Кэш URL'ов тайлов (объект для React state)
+  const [mainPhotoUrls, setMainPhotoUrls] = useState({}); // Кэш URL'ов главных фото
+  const [maskUrls, setMaskUrls] = useState({}); // Кэш URL'ов масок
 
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
@@ -617,7 +625,70 @@ function App() {
       });
   }, [debugMode]);
 
-  // Загружаем изображения после получения индекса
+  // Предзагружаем все главные фото и маски через кэш
+  useEffect(() => {
+    if (slideshowPhotos.length === 0) return;
+
+    const preloadMainPhotos = async () => {
+      const newMainPhotoUrls = {};
+      const newMaskUrls = {};
+      
+      if (debugMode) {
+        console.log('[DEBUG] Начинаем предзагрузку главных фото и масок:', {
+          count: slideshowPhotos.length
+        });
+      }
+
+      // Загружаем все главные фото и маски параллельно
+      const loadPromises = slideshowPhotos.map(async (photo) => {
+        const photoUrl = `/photos/${photo.filename}`;
+        const baseName = photo.filename.replace(/\.(jpg|jpeg)$/i, '');
+        const maskFilename = `${baseName}.png`;
+        const maskUrl = `/photos/${maskFilename}`;
+        
+        try {
+          // Загружаем главное фото через кэш
+          const cachedPhotoUrl = await imageCache.loadImage(photoUrl);
+          if (cachedPhotoUrl) {
+            newMainPhotoUrls[photo.filename] = cachedPhotoUrl;
+          }
+          
+          // Загружаем маску через кэш
+          try {
+            const cachedMaskUrl = await imageCache.loadImage(maskUrl);
+            if (cachedMaskUrl) {
+              newMaskUrls[photo.filename] = cachedMaskUrl;
+            }
+          } catch (maskError) {
+            // Маска может отсутствовать, это нормально
+            if (debugMode) {
+              console.log('[DEBUG] Маска не загружена в кэш:', maskUrl, maskError);
+            }
+          }
+        } catch (error) {
+          console.warn('Ошибка предзагрузки главного фото:', photoUrl, error);
+          // Fallback на прямой URL
+          newMainPhotoUrls[photo.filename] = photoUrl;
+        }
+      });
+      
+      await Promise.all(loadPromises);
+      setMainPhotoUrls(newMainPhotoUrls);
+      setMaskUrls(newMaskUrls);
+      
+      if (debugMode) {
+        console.log('[DEBUG] Предзагрузка главных фото и масок завершена:', {
+          photosLoaded: Object.keys(newMainPhotoUrls).length,
+          masksLoaded: Object.keys(newMaskUrls).length,
+          totalPhotos: slideshowPhotos.length
+        });
+      }
+    };
+
+    preloadMainPhotos();
+  }, [slideshowPhotos, debugMode]);
+
+  // Загружаем изображения после получения индекса и предзагружаем все тайлы
   useEffect(() => {
     if (!photoIndex) return;
 
@@ -637,11 +708,30 @@ function App() {
         loadedImages.push({ filename: photo.filename });
       });
 
-      setLoadingProgress('Готово!');
-
       setImages(loadedImages);
       setPhotoColors(colors);
       setPhotoAspects(photoAspects);
+      
+      // Предзагружаем все тайлы из /tiles/ (все файлы из index.json)
+      // Главные фото могут быть тайлами - для них есть уменьшенные версии в /tiles/
+      setLoadingProgress('Предзагрузка тайлов...');
+      
+      // Предзагружаем все тайлы из /tiles/ (включая главные фото, у которых есть уменьшенные версии)
+      const tilePromises = photos.map(async (photo) => {
+        const tileUrl = `/tiles/${photo.filename}`;
+        await imageCache.loadImage(tileUrl); // loadImage обрабатывает ошибки и возвращает null при неудаче
+      });
+      
+      // Ждем завершения загрузки всех тайлов
+      await Promise.all(tilePromises);
+      
+      if (debugMode) {
+        console.log('[DEBUG] Все тайлы предзагружены', {
+          totalPhotos: photos.length,
+          tilesPreloaded: tilePromises.length
+        });
+      }
+      
       setLoadingProgress('Готово!');
       setLoading(false);
     };
@@ -655,7 +745,7 @@ function App() {
     }, 100);
 
     return () => clearInterval(checkCanvas);
-  }, [photoIndex]);
+  }, [photoIndex, debugMode]);
 
   // Вычисляем размер контейнера на основе доступного пространства
   useEffect(() => {
@@ -709,15 +799,19 @@ function App() {
 
     const currentPhoto = slideshowPhotos[currentMainIndex];
     
-    // Загружаем основное фото (оригинальное, не сжатое)
+    // Загружаем основное фото через кэш (оригинальное, не сжатое)
     const mainImage = new Image();
     mainImage.crossOrigin = 'anonymous';
     
     try {
+      // Используем кэшированный URL если доступен
+      const photoUrl = `/photos/${currentPhoto.filename}`;
+      const cachedPhotoUrl = mainPhotoUrls[currentPhoto.filename] || photoUrl;
+      
       await new Promise((resolve, reject) => {
         mainImage.onload = resolve;
         mainImage.onerror = reject;
-        mainImage.src = `/photos/${currentPhoto.filename}`;
+        mainImage.src = cachedPhotoUrl;
       });
     } catch (e) {
       console.error('Ошибка загрузки основного фото:', currentPhoto.filename);
@@ -731,8 +825,10 @@ function App() {
     const imgAspect = mainImage.naturalWidth / mainImage.naturalHeight;
     setImageAspectRatio(imgAspect);
     
-    // Устанавливаем URL основного фото для фона
-    setMainImageUrl(`/photos/${currentPhoto.filename}`);
+    // Устанавливаем URL основного фото для фона (используем кэшированный URL)
+    const photoUrl = `/photos/${currentPhoto.filename}`;
+    const cachedPhotoUrl = mainPhotoUrls[currentPhoto.filename] || photoUrl;
+    setMainImageUrl(cachedPhotoUrl);
 
     // Вычисляем размер главного фото, вписанного в контейнер (contain)
     const containerAspect = containerSize.width / containerSize.height;
@@ -823,7 +919,7 @@ function App() {
     
     setEdgeColors(edgeColorSamples);
 
-    // Загружаем маску синхронно (если есть)
+    // Загружаем маску синхронно (если есть) через кэш
     // Маска имеет то же имя что и фото, но с расширением PNG
     // Масштабируем маску до размера главного фото в контейнере
     const baseName = currentPhoto.filename.replace(/\.(jpg|jpeg)$/i, '');
@@ -831,14 +927,18 @@ function App() {
     let currentMaskData = null;
     try {
       const maskSize = { width: mainImgWidth, height: mainImgHeight };
-      const mask = await loadMask(maskFilename, canvasWidth, canvasHeight, maskSize);
+      // Используем кэшированный URL маски если доступен
+      const maskUrl = `/photos/${maskFilename}`;
+      const cachedMaskUrl = maskUrls[currentPhoto.filename] || maskUrl;
+      const mask = await loadMask(maskFilename, canvasWidth, canvasHeight, maskSize, cachedMaskUrl);
       if (mask && mask.imageData) {
         currentMaskData = mask;
         if (debugMode) {
           console.log('[DEBUG] Маска загружена:', {
             filename: maskFilename,
             width: mask.width,
-            height: mask.height
+            height: mask.height,
+            fromCache: !!maskUrls[currentPhoto.filename]
           });
         }
       } else {
@@ -854,21 +954,68 @@ function App() {
       }
     }
 
-    // Строим Quadtree
-    const root = buildQuadtree(imageData, canvasWidth, canvasHeight);
+    // Строим Quadtree только для области, где нарисовано изображение
+    // Это важно, чтобы тайлы покрывали всю область основного изображения
+    const imageAreaWidth = drawWidth;
+    const imageAreaHeight = drawHeight;
+    const imageAreaX = drawX;
+    const imageAreaY = drawY;
+    
+    // Создаем новый canvas только для области изображения
+    const imageAreaCanvas = document.createElement('canvas');
+    imageAreaCanvas.width = imageAreaWidth;
+    imageAreaCanvas.height = imageAreaHeight;
+    const imageAreaCtx = imageAreaCanvas.getContext('2d');
+    
+    // Копируем область изображения на новый canvas
+    imageAreaCtx.drawImage(mainImage, 0, 0, imageAreaWidth, imageAreaHeight);
+    const imageAreaData = imageAreaCtx.getImageData(0, 0, imageAreaWidth, imageAreaHeight);
+    
+    // Строим Quadtree для области изображения
+    const root = buildQuadtree(imageAreaData, imageAreaWidth, imageAreaHeight);
     const leaves = collectLeaves(root).filter(node => {
-      // Фильтруем узлы с валидным цветом
+      // Фильтруем узлы с валидным цветом и которые находятся в пределах области изображения
       if (!node.avgColor) return false;
       const c = node.avgColor;
-      return !isNaN(c.r) && !isNaN(c.g) && !isNaN(c.b) &&
-             isFinite(c.r) && isFinite(c.g) && isFinite(c.b);
+      if (!isFinite(c.r) || !isFinite(c.g) || !isFinite(c.b) ||
+          isNaN(c.r) || isNaN(c.g) || isNaN(c.b)) {
+        return false;
+      }
+      // Проверяем, что узел находится в пределах области изображения
+      if (node.x < 0 || node.y < 0 || 
+          node.x >= imageAreaWidth || node.y >= imageAreaHeight) {
+        return false;
+      }
+      return true;
     });
+    
+    if (debugMode) {
+      console.log('[DEBUG] Quadtree leaves:', {
+        totalLeaves: leaves.length,
+        imageAreaSize: { width: imageAreaWidth, height: imageAreaHeight },
+        imageAreaPosition: { x: imageAreaX, y: imageAreaY },
+        leavesCoverage: {
+          minX: Math.min(...leaves.map(n => n.x)),
+          maxX: Math.max(...leaves.map(n => n.x + n.size)),
+          minY: Math.min(...leaves.map(n => n.y)),
+          maxY: Math.max(...leaves.map(n => n.y + n.size)),
+        },
+        expectedCoverage: {
+          minX: 0,
+          maxX: imageAreaWidth,
+          minY: 0,
+          maxY: imageAreaHeight,
+        }
+      });
+    }
 
-    // Масштаб от canvas к размеру главного фото в контейнере
-    const scaleX = mainImgWidth / canvasWidth;
-    const scaleY = mainImgHeight / canvasHeight;
+    // Масштаб от области изображения на canvas к размеру главного фото в контейнере
+    const scaleX = mainImgWidth / imageAreaWidth;
+    const scaleY = mainImgHeight / imageAreaHeight;
 
-    // Исключаем текущее главное фото из списка доступных для тайлов
+    // Исключаем только текущее главное фото из списка доступных для тайлов
+    // Главные фото могут быть тайлами (у них есть уменьшенные версии в /tiles/)
+    // Но не используем текущее главное фото как тайл на самом себе
     const currentMainPhotoIndex = images.findIndex(img => img.filename === currentPhoto.filename);
     const excludedIndices = new Set();
     if (currentMainPhotoIndex !== -1) {
@@ -975,9 +1122,84 @@ function App() {
         }
       }
 
+      // Убеждаемся, что тайл покрывает всю область узла
+      // Вычисляем размер узла в координатах контейнера
+      const nodeWidth = node.size * scaleX;
+      const nodeHeight = node.size * scaleY;
+      
+      // Тайл должен покрывать всю область узла, даже если пропорции фото другие
+      // Используем размер узла как минимальный размер тайла
+      let finalWidth = Math.max(tileWidth * scaleX, nodeWidth);
+      let finalHeight = Math.max(tileHeight * scaleY, nodeHeight);
+      
+      // Позиция тайла должна точно соответствовать позиции узла относительно области изображения
+      // Масштабируем координаты узла от области изображения к размеру основного фото в контейнере
+      let tileX = mainImgX + node.x * scaleX;
+      let tileY = mainImgY + node.y * scaleY;
+      
+      // Убеждаемся, что тайлы на краях доходят до границ основного изображения
+      // Проверяем левый край
+      if (node.x <= 0.1) {
+        // Тайл на левом краю - начинаем с границы основного изображения
+        tileX = mainImgX;
+        if (node.x + node.size < imageAreaWidth) {
+          finalWidth = (node.x + node.size) * scaleX;
+        } else {
+          // Если узел выходит за границу, растягиваем до правого края
+          finalWidth = mainImgX + mainImgWidth - tileX;
+        }
+      }
+      
+      // Проверяем правый край
+      if (node.x + node.size >= imageAreaWidth - 0.1) {
+        // Тайл на правом краю - растягиваем до границы основного изображения
+        const rightEdge = mainImgX + mainImgWidth;
+        finalWidth = rightEdge - tileX;
+      }
+      
+      // Проверяем верхний край
+      if (node.y <= 0.1) {
+        // Тайл на верхнем краю - начинаем с границы основного изображения
+        tileY = mainImgY;
+        if (node.y + node.size < imageAreaHeight) {
+          finalHeight = (node.y + node.size) * scaleY;
+        } else {
+          // Если узел выходит за границу, растягиваем до нижнего края
+          finalHeight = mainImgY + mainImgHeight - tileY;
+        }
+      }
+      
+      // Проверяем нижний край - используем более широкое условие для захвата всех тайлов
+      if (node.y + node.size >= imageAreaHeight - 1.0) {
+        // Тайл на нижнем краю или близко к нему - растягиваем до границы основного изображения
+        const bottomEdge = mainImgY + mainImgHeight;
+        finalHeight = bottomEdge - tileY;
+      }
+      
+      // Финальная проверка: убеждаемся, что тайлы доходят до границ
+      // Проверяем правый край
+      if (tileX + finalWidth < mainImgX + mainImgWidth - 0.5) {
+        // Тайл не доходит до правого края - проверяем, должен ли он
+        const nodeRightEdge = node.x + node.size;
+        if (nodeRightEdge >= imageAreaWidth - 1.0) {
+          // Должен доходить - растягиваем
+          finalWidth = mainImgX + mainImgWidth - tileX;
+        }
+      }
+      
+      // Проверяем нижний край
+      if (tileY + finalHeight < mainImgY + mainImgHeight - 0.5) {
+        // Тайл не доходит до нижнего края - проверяем, должен ли он
+        const nodeBottomEdge = node.y + node.size;
+        if (nodeBottomEdge >= imageAreaHeight - 1.0) {
+          // Должен доходить - растягиваем
+          finalHeight = mainImgY + mainImgHeight - tileY;
+        }
+      }
+      
       // Вычисляем центр тайла для определения opacity (относительно главного фото)
-      const tileCenterX = mainImgX + (node.x + tileWidth / 2) * scaleX;
-      const tileCenterY = mainImgY + (node.y + tileHeight / 2) * scaleY;
+      const tileCenterX = tileX + finalWidth / 2;
+      const tileCenterY = tileY + finalHeight / 2;
       
       // Вычисляем opacity на основе маски
       // Координаты относительно главного фото для маски
@@ -993,10 +1215,10 @@ function App() {
       );
       
       return {
-        x: mainImgX + node.x * scaleX,
-        y: mainImgY + node.y * scaleY,
-        width: tileWidth * scaleX,
-        height: tileHeight * scaleY,
+        x: tileX,
+        y: tileY,
+        width: finalWidth,
+        height: finalHeight,
         imageIndex: bestIndex,
         avgColor: node.avgColor,
         centerX: tileCenterX,
@@ -1126,20 +1348,118 @@ function App() {
     const newTiles = [...mainImageTiles, ...backgroundTiles];
 
     if (debugMode) {
+      // Проверяем покрытие области основного изображения тайлами
+      const mainImageTilesCoverage = {
+        minX: Math.min(...mainImageTiles.map(t => t.x)),
+        maxX: Math.max(...mainImageTiles.map(t => t.x + t.width)),
+        minY: Math.min(...mainImageTiles.map(t => t.y)),
+        maxY: Math.max(...mainImageTiles.map(t => t.y + t.height)),
+      };
+      
+      const expectedMainImageCoverage = {
+        minX: mainImgX,
+        maxX: mainImgX + mainImgWidth,
+        minY: mainImgY,
+        maxY: mainImgY + mainImgHeight,
+      };
+      
+      // Проверяем пропуски
+      const gaps = [];
+      const tolerance = 1; // Допустимый зазор в пикселях
+      
+      // Проверяем покрытие по X
+      if (Math.abs(mainImageTilesCoverage.minX - expectedMainImageCoverage.minX) > tolerance) {
+        gaps.push({
+          type: 'left_edge',
+          expected: expectedMainImageCoverage.minX,
+          actual: mainImageTilesCoverage.minX,
+          gap: mainImageTilesCoverage.minX - expectedMainImageCoverage.minX
+        });
+      }
+      if (Math.abs(mainImageTilesCoverage.maxX - expectedMainImageCoverage.maxX) > tolerance) {
+        gaps.push({
+          type: 'right_edge',
+          expected: expectedMainImageCoverage.maxX,
+          actual: mainImageTilesCoverage.maxX,
+          gap: expectedMainImageCoverage.maxX - mainImageTilesCoverage.maxX
+        });
+      }
+      if (Math.abs(mainImageTilesCoverage.minY - expectedMainImageCoverage.minY) > tolerance) {
+        gaps.push({
+          type: 'top_edge',
+          expected: expectedMainImageCoverage.minY,
+          actual: mainImageTilesCoverage.minY,
+          gap: mainImageTilesCoverage.minY - expectedMainImageCoverage.minY
+        });
+      }
+      if (Math.abs(mainImageTilesCoverage.maxY - expectedMainImageCoverage.maxY) > tolerance) {
+        gaps.push({
+          type: 'bottom_edge',
+          expected: expectedMainImageCoverage.maxY,
+          actual: mainImageTilesCoverage.maxY,
+          gap: expectedMainImageCoverage.maxY - mainImageTilesCoverage.maxY
+        });
+      }
+      
       console.log('[DEBUG] Мозаика сгенерирована:', {
         tilesCount: newTiles.length,
+        mainImageTilesCount: mainImageTiles.length,
+        backgroundTilesCount: backgroundTiles.length,
         opacityRange: {
           min: Math.min(...newTiles.map(t => t.opacity)),
           max: Math.max(...newTiles.map(t => t.opacity))
-        }
+        },
+        mainImageSize: {
+          x: mainImgX,
+          y: mainImgY,
+          width: mainImgWidth,
+          height: mainImgHeight
+        },
+        mainImageTilesCoverage,
+        expectedMainImageCoverage,
+        gaps: gaps.length > 0 ? gaps : 'Нет пропусков',
+        scaleFactors: { scaleX, scaleY },
+        imageAreaSize: { width: imageAreaWidth, height: imageAreaHeight }
       });
+      
+      // Логируем первые 10 тайлов для детального анализа
+      if (mainImageTiles.length > 0) {
+        console.log('[DEBUG] Первые 10 тайлов основного изображения:', 
+          mainImageTiles.slice(0, 10).map((tile, idx) => ({
+            index: idx,
+            x: Math.round(tile.x * 100) / 100,
+            y: Math.round(tile.y * 100) / 100,
+            width: Math.round(tile.width * 100) / 100,
+            height: Math.round(tile.height * 100) / 100,
+            right: Math.round((tile.x + tile.width) * 100) / 100,
+            bottom: Math.round((tile.y + tile.height) * 100) / 100,
+            opacity: Math.round(tile.opacity * 100) / 100
+          }))
+        );
+      }
+      
+      // Логируем последние 10 тайлов (особенно важно для проверки нижней части)
+      if (mainImageTiles.length > 10) {
+        console.log('[DEBUG] Последние 10 тайлов основного изображения:', 
+          mainImageTiles.slice(-10).map((tile, idx) => ({
+            index: mainImageTiles.length - 10 + idx,
+            x: Math.round(tile.x * 100) / 100,
+            y: Math.round(tile.y * 100) / 100,
+            width: Math.round(tile.width * 100) / 100,
+            height: Math.round(tile.height * 100) / 100,
+            right: Math.round((tile.x + tile.width) * 100) / 100,
+            bottom: Math.round((tile.y + tile.height) * 100) / 100,
+            opacity: Math.round(tile.opacity * 100) / 100
+          }))
+        );
+      }
     }
     
     // Обновляем маску в состоянии только один раз после генерации
     setMaskData(currentMaskData);
     
     setTiles(newTiles);
-  }, [images, photoColors, photoAspects, slideshowPhotos, currentMainIndex, containerSize, debugMode]);
+  }, [images, photoColors, photoAspects, slideshowPhotos, currentMainIndex, containerSize, debugMode, mainPhotoUrls, maskUrls]);
 
   // Регенерируем мозаику при смене параметров
   useEffect(() => {
@@ -1156,6 +1476,47 @@ function App() {
       setHoveredTileIndex(null);
     }
   }, [loading, currentMainIndex, generateMosaic, containerSize, debugMode]);
+
+  // Предзагружаем тайлы через кэш при изменении tiles
+  useEffect(() => {
+    if (tiles.length === 0 || images.length === 0) return;
+
+    const loadTiles = async () => {
+      const newUrls = {};
+      const uniqueImageIndices = new Set(tiles.map(tile => tile.imageIndex));
+      
+      // Загружаем все уникальные тайлы через кэш
+      // Главные фото могут быть тайлами - для них есть уменьшенные версии в /tiles/
+      const loadPromises = Array.from(uniqueImageIndices).map(async (imageIndex) => {
+        const image = images[imageIndex];
+        if (!image || !image.filename) return;
+        
+        const tileUrl = `/tiles/${image.filename}`;
+        
+        // loadImage теперь возвращает null вместо выброса ошибки
+        const cachedUrl = await imageCache.loadImage(tileUrl);
+        if (cachedUrl) {
+          newUrls[imageIndex] = cachedUrl;
+        } else {
+          // Fallback на прямой URL если кэш не работает или сервер недоступен
+          newUrls[imageIndex] = tileUrl;
+        }
+      });
+      
+      await Promise.all(loadPromises);
+      setTileImageUrls(newUrls);
+      
+      if (debugMode) {
+        console.log('[DEBUG] Тайлы загружены через кэш:', {
+          totalTiles: tiles.length,
+          uniqueImages: uniqueImageIndices.size,
+          cachedUrls: Object.keys(newUrls).length
+        });
+      }
+    };
+
+    loadTiles();
+  }, [tiles, images, debugMode]);
 
   // Автоматическая смена основного фото каждые 5 секунд (только если autoPlay = true)
   useEffect(() => {
@@ -1216,14 +1577,21 @@ function App() {
       // Используем коэффициент 4x от текущего размера для баланса качества и размера файла
       const scaleFactor = 4;
       
-      // Загружаем основное фото в высоком разрешении
+      // Загружаем основное фото в высоком разрешении (используем кэш)
       const mainImg = new Image();
       mainImg.crossOrigin = 'anonymous';
+      
+      // Используем кэшированный URL если доступен
+      const currentPhoto = slideshowPhotos[currentMainIndex];
+      const photoUrl = currentPhoto ? `/photos/${currentPhoto.filename}` : mainImageUrl;
+      const cachedPhotoUrl = currentPhoto && mainPhotoUrls[currentPhoto.filename] 
+        ? mainPhotoUrls[currentPhoto.filename] 
+        : mainImageUrl;
       
       await new Promise((resolve, reject) => {
         mainImg.onload = resolve;
         mainImg.onerror = reject;
-        mainImg.src = mainImageUrl;
+        mainImg.src = cachedPhotoUrl;
       });
       
       // Вычисляем пропорции основного изображения
@@ -1249,12 +1617,18 @@ function App() {
       // Рисуем фон (основное фото) с сохранением пропорций в том же месте, где оно находится в контейнере
       highResCtx.drawImage(mainImg, mainImgX, mainImgY, mainImgWidth, mainImgHeight);
       
-      // Загружаем и рисуем все тайлы
+      // Загружаем и рисуем все тайлы (используем кэш)
       const tilePromises = tiles.map(async (tile, index) => {
         const tileImg = new Image();
         tileImg.crossOrigin = 'anonymous';
         
-        return new Promise((resolve) => {
+        return new Promise(async (resolve) => {
+          // Используем кэш для загрузки тайла
+          // loadImage теперь возвращает null вместо выброса ошибки
+          const tileUrl = `/tiles/${images[tile.imageIndex]?.filename}`;
+          const cachedUrl = await imageCache.loadImage(tileUrl);
+          tileImg.src = cachedUrl || tileUrl;
+          
           tileImg.onload = () => {
             // Масштабируем координаты и размеры тайла
             // Используем scaleFactor для масштабирования относительно контейнера
@@ -1291,7 +1665,6 @@ function App() {
             resolve();
           };
           tileImg.onerror = () => resolve(); // Пропускаем ошибки загрузки
-          tileImg.src = `/tiles/${images[tile.imageIndex]?.filename}`;
         });
       });
       
@@ -1372,7 +1745,7 @@ function App() {
       console.error('Ошибка генерации высокого разрешения:', error);
       setIsGeneratingHighRes(false);
     }
-  }, [tiles, mainImageUrl, containerSize, images, slideshowPhotos, currentMainIndex, debugMode, isGeneratingHighRes, MIN_OPACITY, IMAGE_BRIGHTNESS, IMAGE_SATURATE]);
+  }, [tiles, mainImageUrl, containerSize, images, slideshowPhotos, currentMainIndex, debugMode, isGeneratingHighRes, MIN_OPACITY, IMAGE_BRIGHTNESS, IMAGE_SATURATE, mainPhotoUrls]);
 
   // Ручной выбор основного фото
   const handleIndicatorClick = (index) => {
@@ -1475,6 +1848,91 @@ function App() {
               setHoveredTileIndex(null);
             }
           }}
+          onMouseMove={(e) => {
+            if (!debugMode) return;
+            
+            const rect = e.currentTarget.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            // Проверяем, находится ли точка в области основного изображения
+            const isInMainImage = x >= mainImageSize.x && 
+                                 x <= mainImageSize.x + mainImageSize.width &&
+                                 y >= mainImageSize.y && 
+                                 y <= mainImageSize.y + mainImageSize.height;
+            
+            if (!isInMainImage) return;
+            
+            // Проверяем, есть ли тайл в этой точке
+            const tileAtPoint = tiles.find(tile => {
+              return x >= tile.x && 
+                     x <= tile.x + tile.width &&
+                     y >= tile.y && 
+                     y <= tile.y + tile.height;
+            });
+            
+            if (!tileAtPoint) {
+              // Нашли пропуск! Логируем информацию
+              const relativeX = x - mainImageSize.x;
+              const relativeY = y - mainImageSize.y;
+              
+              // Находим ближайшие тайлы
+              const nearbyTiles = tiles
+                .filter(tile => {
+                  const tileCenterX = tile.x + tile.width / 2;
+                  const tileCenterY = tile.y + tile.height / 2;
+                  const distance = Math.sqrt(
+                    Math.pow(tileCenterX - x, 2) + 
+                    Math.pow(tileCenterY - y, 2)
+                  );
+                  return distance < 100; // В радиусе 100px
+                })
+                .map(tile => {
+                  const tileCenterX = tile.x + tile.width / 2;
+                  const tileCenterY = tile.y + tile.height / 2;
+                  const distance = Math.sqrt(
+                    Math.pow(tileCenterX - x, 2) + 
+                    Math.pow(tileCenterY - y, 2)
+                  );
+                  return {
+                    index: tiles.indexOf(tile),
+                    x: Math.round(tile.x * 100) / 100,
+                    y: Math.round(tile.y * 100) / 100,
+                    width: Math.round(tile.width * 100) / 100,
+                    height: Math.round(tile.height * 100) / 100,
+                    right: Math.round((tile.x + tile.width) * 100) / 100,
+                    bottom: Math.round((tile.y + tile.height) * 100) / 100,
+                    distance: Math.round(distance * 100) / 100
+                  };
+                })
+                .sort((a, b) => a.distance - b.distance)
+                .slice(0, 5); // Топ-5 ближайших тайлов
+              
+              console.log('[DEBUG] Пропуск тайла обнаружен:', {
+                absoluteCoords: { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 },
+                relativeToMainImage: { 
+                  x: Math.round(relativeX * 100) / 100, 
+                  y: Math.round(relativeY * 100) / 100 
+                },
+                mainImageBounds: {
+                  x: mainImageSize.x,
+                  y: mainImageSize.y,
+                  width: mainImageSize.width,
+                  height: mainImageSize.height,
+                  right: mainImageSize.x + mainImageSize.width,
+                  bottom: mainImageSize.y + mainImageSize.height
+                },
+                nearbyTiles: nearbyTiles.length > 0 ? nearbyTiles : 'Нет ближайших тайлов',
+                totalTiles: tiles.length,
+                mainImageTilesCount: tiles.filter(t => 
+                  t.x >= mainImageSize.x && 
+                  t.x + t.width <= mainImageSize.x + mainImageSize.width &&
+                  t.y >= mainImageSize.y && 
+                  t.y + t.height <= mainImageSize.y + mainImageSize.height
+                ).length
+              });
+            }
+          }}
         >
           {tiles.map((tile, index) => {
             const isActive = hoveredTileIndex === index;
@@ -1502,7 +1960,7 @@ function App() {
                 }}
               >
                 <img
-                  src={`/tiles/${images[tile.imageIndex]?.filename}`}
+                  src={tileImageUrls[tile.imageIndex] || `/tiles/${images[tile.imageIndex]?.filename}`}
                   alt=""
                   loading="lazy"
                   style={{
