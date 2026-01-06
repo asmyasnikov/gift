@@ -1468,14 +1468,25 @@ function App() {
       setPhotoAspects(photoAspects);
       
       // Предзагружаем все тайлы из /tiles/ (все файлы из index.json)
-      // Главные фото могут быть тайлами - для них есть уменьшенные версии в /tiles/
+      // Главные фото (с PNG масками) НЕ могут быть тайлами - исключаем их из списка доступных
       setLoadingProgress('Предзагрузка тайлов...');
+      
+      // Создаем Set имен файлов главных фото (с масками) для быстрой проверки
+      const mainPhotoFilenames = new Set(slideshowPhotos.map(photo => photo.filename));
       
       // Предзагружаем все тайлы из /tiles/ и проверяем их существование
       // Создаем Set доступных индексов тайлов
       const availableIndices = new Set();
       const missingTiles = [];
       const tilePromises = photos.map(async (photo, index) => {
+        // Пропускаем главные фото (те, у которых есть PNG маски) - они не могут быть тайлами
+        if (mainPhotoFilenames.has(photo.filename)) {
+          if (debugMode) {
+            console.log(`[DEBUG] Пропуск главного фото (не может быть тайлом): index=${index}, filename=${photo.filename}`);
+          }
+          return;
+        }
+        
         const tileUrl = `/tiles/${photo.filename}`;
         // Проверяем существование тайла через HEAD запрос
         try {
@@ -1510,11 +1521,13 @@ function App() {
       // Устанавливаем флаг, что все тайлы загружены и проверены
       setTilesLoaded(true);
       
+      const excludedMainPhotos = slideshowPhotos.length;
       console.log('[DEBUG] Все тайлы предзагружены и проверены', {
         totalPhotos: photos.length,
         tilesPreloaded: tilePromises.length,
         availableTiles: availableIndices.size,
-        missingTiles: photos.length - availableIndices.size,
+        excludedMainPhotos: excludedMainPhotos,
+        missingTiles: photos.length - availableIndices.size - excludedMainPhotos,
         availableIndices: Array.from(availableIndices).sort((a, b) => a - b),
         missingTilesList: missingTiles.map(t => `${t.index}:${t.filename}`)
       });
@@ -1532,7 +1545,7 @@ function App() {
     }, 100);
 
     return () => clearInterval(checkCanvas);
-  }, [photoIndex, debugMode]);
+  }, [photoIndex, slideshowPhotos, debugMode]);
 
   // Вычисляем размер контейнера на основе доступного пространства
   // Используем visualViewport API для точного определения размера на мобильных устройствах
@@ -1791,9 +1804,8 @@ function App() {
     const scaleX = mainImgWidth / imageAreaWidth;
     const scaleY = mainImgHeight / imageAreaHeight;
 
-    // Исключаем только текущее главное фото из списка доступных для тайлов
-    // Главные фото могут быть тайлами (у них есть уменьшенные версии в /tiles/)
-    // Но не используем текущее главное фото как тайл на самом себе
+    // Главные фото (с PNG масками) уже исключены из availableTileIndices при формировании списка
+    // Но для дополнительной надежности исключаем текущее главное фото (на случай, если оно попало в список)
     const currentMainPhotoIndex = images.findIndex(img => img.filename === currentPhoto.filename);
     const excludedIndices = new Set();
     if (currentMainPhotoIndex !== -1) {
