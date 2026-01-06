@@ -990,15 +990,23 @@ function App() {
       const params = new URLSearchParams(window.location.search);
       const photoParam = params.get('photo');
       if (photoParam !== null) {
-        const photoIndex = parseInt(photoParam, 10);
-        if (!isNaN(photoIndex) && photoIndex >= 0 && photoIndex < slideshowPhotos.length) {
+        // Ищем фото по имени файла без расширения
+        const photoIndex = slideshowPhotos.findIndex(photo => {
+          const baseName = photo.filename.replace(/\.(jpg|jpeg|png|heic)$/i, '');
+          return baseName === photoParam;
+        });
+        if (photoIndex !== -1) {
           setCurrentMainIndex(photoIndex);
         }
       } else {
-        // Если параметра нет, устанавливаем его в URL
+        // Если параметра нет, устанавливаем его в URL с именем первого фото
         const params = new URLSearchParams(window.location.search);
-        params.set('photo', '0');
-        window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+        const firstPhoto = slideshowPhotos[0];
+        if (firstPhoto) {
+          const baseName = firstPhoto.filename.replace(/\.(jpg|jpeg|png|heic)$/i, '');
+          params.set('photo', baseName);
+          window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+        }
       }
     }
   }, [slideshowPhotos]);
@@ -2120,10 +2128,14 @@ function App() {
       
       setCurrentMainIndex(newIndex);
       
-      // Обновляем URL с параметром photo
+      // Обновляем URL с параметром photo (имя файла без расширения)
       const params = new URLSearchParams(window.location.search);
-      params.set('photo', newIndex.toString());
-      window.history.pushState({}, '', `${window.location.pathname}?${params.toString()}`);
+      const currentPhoto = slideshowPhotos[newIndex];
+      if (currentPhoto) {
+        const baseName = currentPhoto.filename.replace(/\.(jpg|jpeg|png|heic)$/i, '');
+        params.set('photo', baseName);
+        window.history.pushState({}, '', `${window.location.pathname}?${params.toString()}`);
+      }
       
       setTimeout(() => {
         setTransitioning(false);
@@ -2321,10 +2333,14 @@ function App() {
     setTimeout(() => {
       setCurrentMainIndex(index);
       
-      // Обновляем URL с параметром photo
+      // Обновляем URL с параметром photo (имя файла без расширения)
       const params = new URLSearchParams(window.location.search);
-      params.set('photo', index.toString());
-      window.history.pushState({}, '', `${window.location.pathname}?${params.toString()}`);
+      const currentPhoto = slideshowPhotos[index];
+      if (currentPhoto) {
+        const baseName = currentPhoto.filename.replace(/\.(jpg|jpeg|png|heic)$/i, '');
+        params.set('photo', baseName);
+        window.history.pushState({}, '', `${window.location.pathname}?${params.toString()}`);
+      }
       
       setTimeout(() => {
         setTransitioning(false);
