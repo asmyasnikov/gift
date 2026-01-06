@@ -93,13 +93,13 @@ body {
 .mosaic-tiles {
   position: relative;
   z-index: 2;
-  overflow: hidden;
+  overflow: visible; /* Разрешаем видимость тайлов за пределами контейнера */
   /* Размеры устанавливаются через inline style из containerSize */
 }
 
 .mosaic-tile {
   position: absolute;
-  overflow: hidden;
+  overflow: visible; /* Разрешаем видимость изображений за пределами контейнера тайла */
   transition: transform 0.3s ease, z-index 0.3s ease;
   border: 0.5px solid rgba(0, 0, 0, 0.2);
   transform-origin: center center;

@@ -17,10 +17,6 @@ const MAX_OPACITY = 1.0;  // Максимальная прозрачность �
 // Больше значение = более плавный/длинный переход (больше тайлов в переходе), меньше = более резкий/короткий переход
 const OPACITY_TRANSITION_TILES = 1; // Количество тайлов для перехода от min к max opacity
 
-// Константы для фильтров изображений
-const IMAGE_BRIGHTNESS = 0.85; // Яркость тайлов (0.0 - темнее, 1.0 - оригинал, >1.0 - ярче)
-const IMAGE_SATURATE = 1.15;   // Насыщенность тайлов (0.0 - ч/б, 1.0 - оригинал, >1.0 - ярче)
-
 // Константа для увеличения тайла при наведении/клике
 const TILE_HOVER_SCALE = 5; // Масштаб увеличения тайла (1.0 = без увеличения, 2.0 = в 2 раза, и т.д.)
 
@@ -71,6 +67,29 @@ async function loadMask(maskFilename, canvasWidth, canvasHeight, containerSize, 
       height: containerSize.height
     };
   } catch (error) {
+    return null;
+  }
+}
+
+// Конвертирует maskData в data URL для использования в CSS mask-image
+function maskDataToDataUrl(maskData) {
+  if (!maskData || !maskData.imageData) {
+    return null;
+  }
+  
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = maskData.width;
+    canvas.height = maskData.height;
+    const ctx = canvas.getContext('2d');
+    
+    // Восстанавливаем изображение из imageData
+    ctx.putImageData(maskData.imageData, 0, 0);
+    
+    // Конвертируем в data URL
+    return canvas.toDataURL('image/png');
+  } catch (error) {
+    console.error('[ERROR] Ошибка конвертации maskData в data URL:', error);
     return null;
   }
 }
@@ -982,6 +1001,7 @@ function App() {
   const [borderGradientWidth, setBorderGradientWidth] = useState(0); // Ширина градиента для границ главного фото
   const [autoPlay, setAutoPlay] = useState(false);
   const [maskData, setMaskData] = useState(null);
+  const [maskImageUrl, setMaskImageUrl] = useState(null); // Data URL маски для CSS mask-image
   const [debugMode, setDebugMode] = useState(false);
   const [isGeneratingHighRes, setIsGeneratingHighRes] = useState(false);
   const [hoveredTileIndex, setHoveredTileIndex] = useState(null);
@@ -1802,21 +1822,13 @@ function App() {
         const tileWidth = maxX - minX;
         const tileHeight = maxY - minY;
         
-        // Вычисляем opacity на основе маски (только если попадает на главное фото)
+        // Вычисляем opacity только для градиента на границах главного фото
+        // Маска применяется напрямую через CSS mask-image, поэтому не нужно вычислять opacity на основе маски
         let opacity = MAX_OPACITY; // По умолчанию максимальная прозрачность
-        if (isOnMainImage) {
-          // Координаты центра относительно главного фото для маски
+        if (isOnMainImage && borderGradientWidthValue > 0) {
+          // Координаты центра относительно главного фото
           const maskX = centerX - mainImgX;
           const maskY = centerY - mainImgY;
-          opacity = calculateTileOpacity(
-            maskX,
-            maskY,
-            mainImgWidth,
-            mainImgHeight,
-            currentMaskData,
-            averageTileSize,
-            a // Размер стороны шестиугольника для проверки всей области тайла
-          );
           
           // Применяем градиент прозрачности на границах главного фото
           // Вычисляем расстояние от центра соты до ближайшей границы главного фото
@@ -1832,9 +1844,8 @@ function App() {
           if (minDistToBorder < borderGradientWidthValue) {
             // Вычисляем коэффициент прозрачности: от 0 (на краю) до 1 (на расстоянии borderGradientWidthValue)
             const borderOpacityFactor = minDistToBorder / borderGradientWidthValue;
-            // Применяем градиент: на краю opacity минимальная (MIN_OPACITY), на расстоянии borderGradientWidth - исходная opacity
-            const borderOpacity = opacity * borderOpacityFactor;
-            opacity = borderOpacity;
+            // Применяем градиент: на краю opacity минимальная (MIN_OPACITY), на расстоянии borderGradientWidth - максимальная
+            opacity = MIN_OPACITY + (MAX_OPACITY - MIN_OPACITY) * borderOpacityFactor;
           }
         }
         
@@ -1850,6 +1861,7 @@ function App() {
           imageIndex: bestIndex,
           avgColor: tileColor,
           opacity,
+          isOnMainImage, // Сохраняем информацию о том, попадает ли тайл на главное фото
         });
       } catch (error) {
         console.error(`[ERROR] Ошибка при создании тайла для центра ${index}:`, error, { center });
@@ -2025,6 +2037,14 @@ function App() {
     
     // Обновляем маску в состоянии только один раз после генерации
     setMaskData(currentMaskData);
+    
+    // Конвертируем maskData в data URL для CSS mask-image
+    if (currentMaskData) {
+      const maskUrl = maskDataToDataUrl(currentMaskData);
+      setMaskImageUrl(maskUrl);
+    } else {
+      setMaskImageUrl(null);
+    }
     
     setTiles(newTiles);
   }, [images, photoColors, photoAspects, slideshowPhotos, currentMainIndex, containerSize, debugMode, mainPhotoUrls, maskUrls, availableTileIndices, tilesLoaded]);
@@ -2264,7 +2284,7 @@ function App() {
             
             // Применяем brightness и saturate через фильтры (если не в debug режиме)
             if (!debugMode) {
-              filterCtx.filter = `brightness(${IMAGE_BRIGHTNESS}) saturate(${IMAGE_SATURATE})`;
+              filterCtx.filter = `none`;
             }
             filterCtx.drawImage(tileImg, 0, 0);
             
@@ -2357,7 +2377,7 @@ function App() {
       console.error('Ошибка генерации высокого разрешения:', error);
       setIsGeneratingHighRes(false);
     }
-  }, [tiles, mainImageUrl, containerSize, images, slideshowPhotos, currentMainIndex, debugMode, isGeneratingHighRes, MIN_OPACITY, IMAGE_BRIGHTNESS, IMAGE_SATURATE, mainPhotoUrls]);
+  }, [tiles, mainImageUrl, containerSize, images, slideshowPhotos, currentMainIndex, debugMode, isGeneratingHighRes, MIN_OPACITY, mainPhotoUrls]);
 
   // Ручной выбор основного фото
   const handleIndicatorClick = (index) => {
@@ -2640,6 +2660,23 @@ function App() {
                 })))
               : 'none';
             
+            // Применяем маску только к тайлам, которые попадают на главное фото
+            const shouldApplyMask = tile.isOnMainImage && maskImageUrl && mainImageSize.width > 0;
+            const maskStyle = shouldApplyMask ? {
+              maskImage: `url(${maskImageUrl})`,
+              // Позиционируем маску относительно изображения внутри тайла
+              // Координаты маски должны быть относительно позиции тайла в контейнере
+              maskPosition: `${mainImageSize.x - tile.x}px ${mainImageSize.y - tile.y}px`,
+              maskSize: `${mainImageSize.width}px ${mainImageSize.height}px`,
+              maskRepeat: 'no-repeat',
+              maskOrigin: 'border-box', // Маска применяется относительно границы элемента
+              WebkitMaskImage: `url(${maskImageUrl})`,
+              WebkitMaskPosition: `${mainImageSize.x - tile.x}px ${mainImageSize.y - tile.y}px`,
+              WebkitMaskSize: `${mainImageSize.width}px ${mainImageSize.height}px`,
+              WebkitMaskRepeat: 'no-repeat',
+              WebkitMaskOrigin: 'border-box',
+            } : {};
+            
             return (
               <div
                 key={tileKey}
@@ -2651,6 +2688,7 @@ function App() {
                   height: tile.height,
                   clipPath: clipPath,
                   WebkitClipPath: clipPath, // Для Safari
+                  overflow: 'visible', // Разрешаем видимость за пределами контейнера
                 }}
                 onMouseEnter={() => setHoveredTileIndex(index)}
                 onMouseLeave={() => setHoveredTileIndex(null)}
@@ -2676,14 +2714,14 @@ function App() {
                     e.target.style.display = 'none';
                   }}
                   style={{
-                    opacity: isActive ? 1 : (tile.opacity || MIN_OPACITY),
                     filter: debugMode 
                       ? 'brightness(0) contrast(1)' // Черные прямоугольники в режиме отладки
-                      : `brightness(${IMAGE_BRIGHTNESS}) saturate(${IMAGE_SATURATE})`,
+                      : `none`,
                     transition: 'opacity 0.3s ease',
                     width: '100%',
                     height: '100%',
                     objectFit: 'cover',
+                    ...maskStyle, // Применяем маску к изображению внутри тайла
                     ...(debugMode && {
                       border: '1px solid rgba(255, 255, 255, 0.3)', // Белая рамка для визуализации
                       boxSizing: 'border-box'
