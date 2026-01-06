@@ -2445,9 +2445,6 @@ function App() {
       highResCanvas.height = canvasHeight;
       const highResCtx = highResCanvas.getContext('2d');
       
-      // Рисуем фон (основное фото) с сохранением пропорций в том же месте, где оно находится в контейнере
-      highResCtx.drawImage(mainImg, mainImgX, mainImgY, mainImgWidth, mainImgHeight);
-      
       // Загружаем и рисуем все тайлы (используем кэш)
       const tilePromises = tiles.map(async (tile, index) => {
         const tileImg = new Image();
@@ -2459,15 +2456,136 @@ function App() {
           tileImg.src = tileUrl;
           
           tileImg.onload = () => {
-            // Fix it
-            resolve();
+            resolve({ tile, tileImg });
           };
-          tileImg.onerror = () => resolve(); // Пропускаем ошибки загрузки
+          tileImg.onerror = () => resolve(null); // Пропускаем ошибки загрузки
         });
       });
       
       // Ждем загрузки всех тайлов
-      await Promise.all(tilePromises);
+      const loadedTiles = (await Promise.all(tilePromises)).filter(item => item !== null);
+      
+      // Рисуем все тайлы на canvas
+      loadedTiles.forEach(({ tile, tileImg }) => {
+        // Масштабируем координаты и размеры
+        const scaledX = tile.x * scaleFactor;
+        const scaledY = tile.y * scaleFactor;
+        const scaledWidth = tile.width * scaleFactor;
+        const scaledHeight = tile.height * scaleFactor;
+        
+        // Сохраняем состояние контекста
+        highResCtx.save();
+        
+        // Устанавливаем прозрачность
+        highResCtx.globalAlpha = 1.0;
+        
+        // Если тайл имеет форму шестиугольника, используем clip для обрезки
+        if (tile.vertices && tile.vertices.length === 6) {
+          // Создаем путь для шестиугольника с масштабированными координатами
+          highResCtx.beginPath();
+          const firstVertex = tile.vertices[0];
+          highResCtx.moveTo(
+            scaledX + (firstVertex.x - tile.x) * scaleFactor,
+            scaledY + (firstVertex.y - tile.y) * scaleFactor
+          );
+          
+          for (let i = 1; i < tile.vertices.length; i++) {
+            const vertex = tile.vertices[i];
+            highResCtx.lineTo(
+              scaledX + (vertex.x - tile.x) * scaleFactor,
+              scaledY + (vertex.y - tile.y) * scaleFactor
+            );
+          }
+          
+          highResCtx.closePath();
+          highResCtx.clip();
+        }
+        
+        // Вычисляем пропорции изображения и контейнера для objectFit: 'cover'
+        const imgAspect = tileImg.naturalWidth / tileImg.naturalHeight;
+        const containerAspect = scaledWidth / scaledHeight;
+        
+        let drawWidth, drawHeight, drawX, drawY;
+        
+        if (imgAspect > containerAspect) {
+          // Изображение шире контейнера - подгоняем по высоте
+          drawHeight = scaledHeight;
+          drawWidth = drawHeight * imgAspect;
+          drawX = scaledX - (drawWidth - scaledWidth) / 2;
+          drawY = scaledY;
+        } else {
+          // Изображение выше контейнера - подгоняем по ширине
+          drawWidth = scaledWidth;
+          drawHeight = drawWidth / imgAspect;
+          drawX = scaledX;
+          drawY = scaledY - (drawHeight - scaledHeight) / 2;
+        }
+        
+        // Рисуем изображение тайла с сохранением пропорций (objectFit: 'cover')
+        highResCtx.drawImage(tileImg, drawX, drawY, drawWidth, drawHeight);
+        
+        // Восстанавливаем состояние контекста (сбрасывает clip и globalAlpha)
+        highResCtx.restore();
+      });
+      
+      // Рисуем главное фото поверх мозаики, обрезанное по маске
+      if (maskImageUrl) {
+        const maskImg = new Image();
+        maskImg.crossOrigin = 'anonymous';
+        
+        await new Promise((resolve, reject) => {
+          maskImg.onload = () => {
+            // Создаем временный canvas для инвертированной маски
+            const invertedMaskCanvas = document.createElement('canvas');
+            invertedMaskCanvas.width = canvasWidth;
+            invertedMaskCanvas.height = canvasHeight;
+            const invertedMaskCtx = invertedMaskCanvas.getContext('2d');
+            
+            // Рисуем маску на временном canvas
+            invertedMaskCtx.drawImage(maskImg, 0, 0, canvasWidth, canvasHeight);
+            
+            // Инвертируем альфа-канал маски
+            const maskImageData = invertedMaskCtx.getImageData(0, 0, canvasWidth, canvasHeight);
+            const data = maskImageData.data;
+            for (let i = 3; i < data.length; i += 4) {
+              // Инвертируем alpha: 0 -> 255, 255 -> 0
+              data[i] = 255 - data[i];
+            }
+            invertedMaskCtx.putImageData(maskImageData, 0, 0);
+            
+            // Создаем временный canvas для главного фото с маской
+            const mainPhotoCanvas = document.createElement('canvas');
+            mainPhotoCanvas.width = canvasWidth;
+            mainPhotoCanvas.height = canvasHeight;
+            const mainPhotoCtx = mainPhotoCanvas.getContext('2d');
+            
+            // Рисуем главное фото на временном canvas
+            mainPhotoCtx.drawImage(mainImg, mainImgX, mainImgY, mainImgWidth, mainImgHeight);
+            
+            // Применяем инвертированную маску к главному фото используя destination-in
+            // Маска определяет видимость пикселей главного фото
+            mainPhotoCtx.save();
+            mainPhotoCtx.globalCompositeOperation = 'destination-in';
+            mainPhotoCtx.drawImage(invertedMaskCanvas, 0, 0);
+            mainPhotoCtx.restore();
+            
+            // Рисуем обрезанное главное фото поверх мозаики
+            highResCtx.drawImage(mainPhotoCanvas, 0, 0);
+            
+            resolve();
+          };
+          maskImg.onerror = () => {
+            // Если маска не загрузилась, рисуем главное фото без маски
+            console.warn('Не удалось загрузить маску для сохранения, рисуем главное фото без маски');
+            highResCtx.drawImage(mainImg, mainImgX, mainImgY, mainImgWidth, mainImgHeight);
+            resolve();
+          };
+          maskImg.src = maskImageUrl;
+        });
+      } else {
+        // Если маски нет, просто рисуем главное фото поверх мозаики
+        highResCtx.drawImage(mainImg, mainImgX, mainImgY, mainImgWidth, mainImgHeight);
+      }
       
       // Вспомогательная функция для скачивания blob
       const downloadBlob = (blob, filename) => {
@@ -2543,7 +2661,7 @@ function App() {
       console.error('Ошибка генерации высокого разрешения:', error);
       setIsGeneratingHighRes(false);
     }
-  }, [tiles, mainImageUrl, containerSize, images, slideshowPhotos, currentMainIndex, debugMode, isGeneratingHighRes, MIN_OPACITY, mainPhotoUrls]);
+  }, [tiles, mainImageUrl, containerSize, images, slideshowPhotos, currentMainIndex, debugMode, isGeneratingHighRes, MIN_OPACITY, mainPhotoUrls, mainImageSize, maskImageUrl]);
 
   // Ручной выбор основного фото
   const handleIndicatorClick = (index) => {
