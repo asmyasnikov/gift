@@ -66,11 +66,7 @@ body {
   position: relative;
   z-index: 1;
   overflow: visible;
-  box-shadow: 
-    0 25px 80px rgba(0, 0, 0, 0.6),
-    0 10px 30px rgba(0, 0, 0, 0.4);
   animation: fadeIn 1s ease-out;
-  background: #0a0a0a;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -104,8 +100,7 @@ body {
 .mosaic-tile {
   position: absolute;
   overflow: hidden;
-  transition: transform 0.3s ease, z-index 0.3s ease;
-  border: 0.5px solid rgba(0, 0, 0, 0.2);
+  transition: transform 0.3s ease, z-index 0.3s ease, clip-path 0.3s ease;
   transform-origin: center center;
   cursor: pointer;
   will-change: transform;
@@ -138,6 +133,7 @@ body {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center;
   display: block;
   /* Сохраняем пропорции исходного фото */
   image-rendering: -webkit-optimize-contrast;
