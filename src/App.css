@@ -110,9 +110,10 @@ body {
 .mosaic-tile:hover,
 .mosaic-tile.active {
   overflow: visible !important;
-  transform: scale(var(--tile-hover-scale, 2)) !important;
+  /* Увеличение теперь происходит в отдельном слое, поэтому убираем transform */
+  /* transform: scale(var(--tile-hover-scale, 2)) !important; */
   z-index: 100 !important;
-  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5);
+  /* box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5); */
 }
 
 /* Для мобильных устройств используем active класс вместо hover */
@@ -123,10 +124,11 @@ body {
   }
   
   .mosaic-tile.active {
-    transform: scale(var(--tile-hover-scale, 2)) !important;
+    /* Увеличение теперь происходит в отдельном слое, поэтому убираем transform */
+    /* transform: scale(var(--tile-hover-scale, 2)) !important; */
     z-index: 100 !important;
     overflow: visible !important;
-    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5);
+    /* box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5); */
   }
 }
 

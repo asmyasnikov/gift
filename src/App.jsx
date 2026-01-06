@@ -2731,6 +2731,9 @@ function App() {
                   clipPath: clipPath,
                   WebkitClipPath: clipPath, // Для Safari
                   overflow: 'visible', // Разрешаем видимость за пределами контейнера
+                  // Скрываем обычный тайл при hover, так как увеличенный отображается в отдельном слое
+                  opacity: isActive ? 0 : 1,
+                  transition: 'opacity 0.3s ease',
                 }}
                 onMouseEnter={() => setHoveredTileIndex(index)}
                 onMouseLeave={() => setHoveredTileIndex(null)}
@@ -2773,6 +2776,50 @@ function App() {
             });
           })()}
         </div>
+        
+        {/* Отдельный слой для активного тайла без маски */}
+        {hoveredTileIndex !== null && tiles[hoveredTileIndex] && (() => {
+          const activeTile = tiles[hoveredTileIndex];
+          const activeTileUrl = tileImageUrls[activeTile.imageIndex];
+          if (!activeTileUrl) return null;
+          
+          const activeClipPath = activeTile.vertices 
+            ? getHexagonClipPath(activeTile.vertices.map(v => ({
+                x: v.x - activeTile.x,
+                y: v.y - activeTile.y
+              })))
+            : 'none';
+          
+          return (
+            <div
+              className="mosaic-tile-active-layer"
+              style={{
+                position: 'absolute',
+                left: activeTile.x,
+                top: activeTile.y,
+                width: activeTile.width,
+                height: activeTile.height,
+                clipPath: activeClipPath,
+                WebkitClipPath: activeClipPath,
+                zIndex: 1000, // Высокий z-index чтобы быть поверх всех тайлов
+                transform: `scale(${TILE_HOVER_SCALE})`,
+                transformOrigin: 'center center',
+                pointerEvents: 'none', // Не блокируем события мыши
+              }}
+            >
+              <img
+                src={activeTileUrl}
+                alt=""
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  boxShadow: '0 5px 20px rgba(0, 0, 0, 0.5)',
+                }}
+              />
+            </div>
+          );
+        })()}
 
         </div>
 

@@ -6,7 +6,7 @@ const PHOTOS_DIR = path.join(process.cwd(), 'photos');
 const TILES_DIR = path.join(process.cwd(), 'tiles');
 
 // Размер для тайлов (максимальная сторона)
-const TILE_MAX_SIZE = 480;
+const TILE_MAX_SIZE = 768;
 // Качество JPEG для тайлов
 const TILE_QUALITY = 85;
 
