@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import imageCache from './imageCache';
 import { config } from '@/config.js';
 
 // Порог вариации цвета для дробления области
@@ -1228,18 +1227,6 @@ function App() {
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
 
-  // Очищаем кэш при загрузке страницы для отображения свежих изменений
-  useEffect(() => {
-    const clearCache = async () => {
-      try {
-        await imageCache.clear();
-        console.log('[DEBUG] Кэш очищен при загрузке страницы');
-      } catch (error) {
-        console.warn('[DEBUG] Ошибка очистки кэша:', error);
-      }
-    };
-    clearCache();
-  }, []); // Выполняется только один раз при монтировании компонента
 
   // Читаем параметры из query string
   useEffect(() => {
@@ -1419,29 +1406,22 @@ function App() {
         const maskFilename = `${baseName}.png`;
         const maskUrl = `/photos/${maskFilename}`;
         
+        // Используем прямые URL - браузер сам закэширует изображения
+        newMainPhotoUrls[photo.filename] = photoUrl;
+        
+        // Проверяем существование маски через HEAD запрос
         try {
-          // Загружаем главное фото через кэш
-          const cachedPhotoUrl = await imageCache.loadImage(photoUrl);
-          if (cachedPhotoUrl) {
-            newMainPhotoUrls[photo.filename] = cachedPhotoUrl;
+          const response = await fetch(maskUrl, { method: 'HEAD' });
+          if (response.ok) {
+            newMaskUrls[photo.filename] = maskUrl;
+          } else if (debugMode) {
+            console.log('[DEBUG] Маска не найдена:', maskUrl);
           }
-          
-          // Загружаем маску через кэш
-          try {
-            const cachedMaskUrl = await imageCache.loadImage(maskUrl);
-            if (cachedMaskUrl) {
-              newMaskUrls[photo.filename] = cachedMaskUrl;
-            }
-          } catch (maskError) {
-            // Маска может отсутствовать, это нормально
-            if (debugMode) {
-              console.log('[DEBUG] Маска не загружена в кэш:', maskUrl, maskError);
-            }
+        } catch (maskError) {
+          // Маска может отсутствовать, это нормально
+          if (debugMode) {
+            console.log('[DEBUG] Маска не загружена:', maskUrl, maskError);
           }
-        } catch (error) {
-          console.warn('Ошибка предзагрузки главного фото:', photoUrl, error);
-          // Fallback на прямой URL
-          newMainPhotoUrls[photo.filename] = photoUrl;
         }
       });
       
@@ -1497,17 +1477,26 @@ function App() {
       const missingTiles = [];
       const tilePromises = photos.map(async (photo, index) => {
         const tileUrl = `/tiles/${photo.filename}`;
-        const cachedUrl = await imageCache.loadImage(tileUrl); // loadImage возвращает null если файл не найден
-        if (cachedUrl) {
-          // Тайл существует - добавляем индекс в список доступных
-          availableIndices.add(index);
-          if (debugMode) {
-            console.log(`[DEBUG] Тайл найден: index=${index}, filename=${photo.filename}`);
+        // Проверяем существование тайла через HEAD запрос
+        try {
+          const response = await fetch(tileUrl, { method: 'HEAD' });
+          if (response.ok) {
+            // Тайл существует - добавляем индекс в список доступных
+            availableIndices.add(index);
+            if (debugMode) {
+              console.log(`[DEBUG] Тайл найден: index=${index}, filename=${photo.filename}`);
+            }
+          } else {
+            missingTiles.push({ index, filename: photo.filename });
+            if (debugMode) {
+              console.warn(`[DEBUG] Тайл НЕ найден: index=${index}, filename=${photo.filename}, url=${tileUrl}`);
+            }
           }
-        } else {
+        } catch (error) {
+          // Ошибка сети - считаем что тайл не найден
           missingTiles.push({ index, filename: photo.filename });
           if (debugMode) {
-            console.warn(`[DEBUG] Тайл НЕ найден: index=${index}, filename=${photo.filename}, url=${tileUrl}`);
+            console.warn(`[DEBUG] Тайл НЕ найден (ошибка сети): index=${index}, filename=${photo.filename}, url=${tileUrl}`);
           }
         }
       });
@@ -2323,18 +2312,11 @@ function App() {
         
         const tileUrl = `/tiles/${image.filename}`;
         
-        // loadImage возвращает null если файл не найден
-        const cachedUrl = await imageCache.loadImage(tileUrl);
-        if (cachedUrl) {
-          newUrls[imageIndex] = cachedUrl;
-          loadedIndices.push(imageIndex);
-          if (debugMode) {
-            console.log(`[DEBUG] Тайл загружен: index=${imageIndex}, filename=${image.filename}`);
-          }
-        } else {
-          // Если тайл не загрузился, не добавляем его (не используем fallback)
-          failedIndices.push({ index: imageIndex, filename: image.filename, url: tileUrl });
-          console.warn(`[DEBUG] Тайл не загружен: ${tileUrl} (imageIndex: ${imageIndex}, filename: ${image.filename})`);
+        // Используем прямой URL - браузер сам закэширует изображение
+        newUrls[imageIndex] = tileUrl;
+        loadedIndices.push(imageIndex);
+        if (debugMode) {
+          console.log(`[DEBUG] Тайл загружен: index=${imageIndex}, filename=${image.filename}`);
         }
       });
       
@@ -2471,12 +2453,10 @@ function App() {
         const tileImg = new Image();
         tileImg.crossOrigin = 'anonymous';
         
-        return new Promise(async (resolve) => {
-          // Используем кэш для загрузки тайла
-          // loadImage теперь возвращает null вместо выброса ошибки
+        return new Promise((resolve) => {
+          // Используем прямой URL - браузер сам закэширует изображение
           const tileUrl = `/tiles/${images[tile.imageIndex]?.filename}`;
-          const cachedUrl = await imageCache.loadImage(tileUrl);
-          tileImg.src = cachedUrl || tileUrl;
+          tileImg.src = tileUrl;
           
           tileImg.onload = () => {
             // Fix it
