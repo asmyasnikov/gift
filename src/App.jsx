@@ -28,9 +28,6 @@ const HEXAGON_HORIZONTAL_SPACING_MULTIPLIER = Math.sqrt(3)+0.05;
 // Множитель для расстояния между рядами по вертикали: 1.5 для правильной упаковки
 const HEXAGON_VERTICAL_SPACING_MULTIPLIER = 1.55;
 
-// Константа для ширины градиента прозрачности на границах главного фото
-// Значение в множителях диаметра описанной окружности соты (1.0 = 1 сота, 1.5 = 1.5 соты, 2.0 = 2 соты)
-const BORDER_GRADIENT_WIDTH_MULTIPLIER = 1.5;
 
 // Загрузка маски для фото
 // Маска - это PNG файл с альфа-каналом, где прозрачные области = области с min opacity
@@ -303,6 +300,48 @@ function maskDataToDataUrl(maskData, containerSize, mainImageSize, tileSize = 0)
     return canvas.toDataURL('image/png');
   } catch (error) {
     console.error('[ERROR] Ошибка конвертации maskData в data URL:', error);
+    return null;
+  }
+}
+
+
+// Создает маску для главного изображения из исходного URL маски PNG
+// Масштабирует маску до размера главного изображения без расширения
+// Инвертирует прозрачность маски (показывает только прозрачные области исходной маски)
+async function createMainImageMaskFromUrl(maskUrl, mainImageSize) {
+  if (!maskUrl || mainImageSize.width <= 0 || mainImageSize.height <= 0) {
+    return null;
+  }
+  
+  try {
+    // Загружаем исходную маску PNG
+    const maskImg = new Image();
+    maskImg.crossOrigin = 'anonymous';
+    
+    await new Promise((resolve, reject) => {
+      maskImg.onload = resolve;
+      maskImg.onerror = reject;
+      maskImg.src = maskUrl;
+    });
+    
+    // Создаем canvas размером главного изображения
+    const canvas = document.createElement('canvas');
+    canvas.width = mainImageSize.width;
+    canvas.height = mainImageSize.height;
+    const ctx = canvas.getContext('2d');
+    
+    // Рисуем маску, масштабируя до размера главного изображения
+    ctx.drawImage(maskImg, 0, 0, mainImageSize.width, mainImageSize.height);
+    
+    // Инвертируем прозрачность маски (альфа-канал)
+    const imageData = ctx.getImageData(0, 0, mainImageSize.width, mainImageSize.height);
+    const invertedImageData = invertImageAlpha(imageData);
+    ctx.putImageData(invertedImageData, 0, 0);
+    
+    // Конвертируем в data URL
+    return canvas.toDataURL('image/png');
+  } catch (error) {
+    console.error('[ERROR] Ошибка создания маски для главного изображения:', error);
     return null;
   }
 }
@@ -1211,10 +1250,10 @@ function App() {
   const [imageAspectRatio, setImageAspectRatio] = useState(1);
   const [mainImageUrl, setMainImageUrl] = useState(null);
   const [edgeColors, setEdgeColors] = useState([]);
-  const [borderGradientWidth, setBorderGradientWidth] = useState(0); // Ширина градиента для границ главного фото
   const [autoPlay, setAutoPlay] = useState(false);
   const [maskData, setMaskData] = useState(null);
   const [maskImageUrl, setMaskImageUrl] = useState(null); // Data URL маски для CSS mask-image
+  const [mainImageMaskUrl, setMainImageMaskUrl] = useState(null); // URL исходной маски PNG для главного изображения
   const [debugMode, setDebugMode] = useState(false);
   const [isGeneratingHighRes, setIsGeneratingHighRes] = useState(false);
   const [hoveredTileIndex, setHoveredTileIndex] = useState(null);
@@ -1959,11 +1998,6 @@ function App() {
     // Вычисляем средний размер тайла для градиента opacity
     const averageTileSize = d_описанная;
     
-    // Ширина градиента для границ главного фото
-    const borderGradientWidthValue = d_описанная * BORDER_GRADIENT_WIDTH_MULTIPLIER;
-    // Сохраняем ширину градиента для использования в CSS mask главного фото
-    setBorderGradientWidth(borderGradientWidthValue);
-    
     // Генерируем плитки для всего контейнера в виде шестиугольной сетки
     const allTiles = [];
     
@@ -2037,32 +2071,9 @@ function App() {
         const tileWidth = maxX - minX;
         const tileHeight = maxY - minY;
         
-        // Вычисляем opacity только для градиента на границах главного фото
+        // Вычисляем opacity
         // Маска применяется напрямую через CSS mask-image, поэтому не нужно вычислять opacity на основе маски
         let opacity = MAX_OPACITY; // По умолчанию максимальная прозрачность
-        if (isOnMainImage && borderGradientWidthValue > 0) {
-          // Координаты центра относительно главного фото
-          const maskX = centerX - mainImgX;
-          const maskY = centerY - mainImgY;
-          
-          // Применяем градиент прозрачности на границах главного фото
-          // Вычисляем расстояние от центра соты до ближайшей границы главного фото
-          const distToLeft = maskX;
-          const distToRight = mainImgWidth - maskX;
-          const distToTop = maskY;
-          const distToBottom = mainImgHeight - maskY;
-          
-          // Находим минимальное расстояние до границы
-          const minDistToBorder = Math.min(distToLeft, distToRight, distToTop, distToBottom);
-          
-          // Если сота находится в зоне градиента (ближе к краю, чем ширина градиента)
-          if (minDistToBorder < borderGradientWidthValue) {
-            // Вычисляем коэффициент прозрачности: от 0 (на краю) до 1 (на расстоянии borderGradientWidthValue)
-            const borderOpacityFactor = minDistToBorder / borderGradientWidthValue;
-            // Применяем градиент: на краю opacity минимальная (MIN_OPACITY), на расстоянии borderGradientWidth - максимальная
-            opacity = MIN_OPACITY + (MAX_OPACITY - MIN_OPACITY) * borderOpacityFactor;
-          }
-        }
         
         allTiles.push({
           x: minX,
@@ -2260,8 +2271,23 @@ function App() {
       // Передаем размер тайла (диаметр описанной окружности) для расширения маски вниз
       const maskUrl = maskDataToDataUrl(currentMaskData, containerSize, localMainImageSize, d_описанная);
       setMaskImageUrl(maskUrl);
+      
+      // Создаем маску для главного изображения из исходного PNG (без расширения)
+      const baseName = currentPhoto.filename.replace(/\.(jpg|jpeg)$/i, '');
+      const maskFilename = `${baseName}.png`;
+      const originalMaskUrl = maskUrls[currentPhoto.filename] || `/photos/${maskFilename}`;
+      
+      // Асинхронно создаем масштабированную маску для главного изображения
+      try {
+        const mainMaskDataUrl = await createMainImageMaskFromUrl(originalMaskUrl, localMainImageSize);
+        setMainImageMaskUrl(mainMaskDataUrl);
+      } catch (error) {
+        console.error('[ERROR] Ошибка создания маски для главного изображения:', error);
+        setMainImageMaskUrl(null);
+      }
     } else {
       setMaskImageUrl(null);
+      setMainImageMaskUrl(null);
     }
     
     setTiles(newTiles);
@@ -2761,36 +2787,17 @@ function App() {
               width: mainImageSize.width,
               height: mainImageSize.height,
               objectFit: 'contain',
-              zIndex: 1,
-              // Добавляем градиент прозрачности на границах главного фото
-              // Используем четыре градиента для каждой стороны и объединяем их
-              ...(borderGradientWidth > 0 ? {
-                maskImage: `
-                  linear-gradient(to right, 
-                    transparent 0%, 
-                    black ${borderGradientWidth}px, 
-                    black calc(100% - ${borderGradientWidth}px), 
-                    transparent 100%),
-                  linear-gradient(to bottom, 
-                    transparent 0%, 
-                    black ${borderGradientWidth}px, 
-                    black calc(100% - ${borderGradientWidth}px), 
-                    transparent 100%)
-                `,
-                maskComposite: 'intersect',
-                WebkitMaskImage: `
-                  linear-gradient(to right, 
-                    transparent 0%, 
-                    black ${borderGradientWidth}px, 
-                    black calc(100% - ${borderGradientWidth}px), 
-                    transparent 100%),
-                  linear-gradient(to bottom, 
-                    transparent 0%, 
-                    black ${borderGradientWidth}px, 
-                    black calc(100% - ${borderGradientWidth}px), 
-                    transparent 100%)
-                `,
-                WebkitMaskComposite: 'source-in'
+              zIndex: 2,
+              // Применяем маску к главному изображению (показываем только прозрачные области исходной маски)
+              ...(mainImageMaskUrl ? {
+                maskImage: `url(${mainImageMaskUrl})`,
+                maskSize: '100% 100%',
+                maskPosition: '0 0',
+                maskRepeat: 'no-repeat',
+                WebkitMaskImage: `url(${mainImageMaskUrl})`,
+                WebkitMaskSize: '100% 100%',
+                WebkitMaskPosition: '0 0',
+                WebkitMaskRepeat: 'no-repeat',
               } : {})
             }}
           />
