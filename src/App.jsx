@@ -892,42 +892,75 @@ function findBestMatch(targetColor, photoColors, usageCount, excludedIndices = n
 }
 
 // Вычисляет opacity тайла на основе маски
-// ИНВЕРТИРОВАННАЯ ЛОГИКА: прозрачные области маски = min opacity, непрозрачные = max opacity
-function calculateTileOpacity(tileCenterX, tileCenterY, containerWidth, containerHeight, maskData = null, averageTileSize = 50) {
+// Проверяет alpha по всей области тайла (шестиугольника)
+// Если в любом месте под тайлом alpha < 0.5 (128 из 255) - устанавливаем MIN_OPACITY
+// Если везде alpha >= 0.5 - устанавливаем MAX_OPACITY
+function calculateTileOpacity(tileCenterX, tileCenterY, containerWidth, containerHeight, maskData = null, averageTileSize = 50, hexSide = null) {
   // Если нет маски - все тайлы с максимальной opacity
   if (!maskData || !maskData.imageData) {
     return MAX_OPACITY;
   }
   
-  // Проверяем, находится ли центр тайла в прозрачной области маски
-  if (isTransparentInMask(tileCenterX, tileCenterY, maskData)) {
-    // Внутри прозрачной области маски - всегда MIN_OPACITY
-    return MIN_OPACITY;
+  const imgData = maskData.imageData;
+  
+  // Если hexSide не передан, используем упрощенную проверку только центра
+  if (!hexSide) {
+    const px = Math.floor(tileCenterX);
+    const py = Math.floor(tileCenterY);
+    
+    // Проверяем границы
+    if (px < 0 || px >= imgData.width || py < 0 || py >= imgData.height) {
+      return MAX_OPACITY;
+    }
+    
+    // Получаем alpha значение в точке центра тайла
+    const idx = (py * imgData.width + px) * 4;
+    const alpha = imgData.data[idx + 3];
+    const alphaNormalized = alpha / 255;
+    
+    return alphaNormalized < 0.5 ? MIN_OPACITY : MAX_OPACITY;
   }
   
-  // Тайл находится вне прозрачной области маски
-  // Вычисляем расстояние до ближайшей прозрачной точки маски
-  // Используем средний размер тайла для ограничения радиуса поиска
-  const maxSearchDistance = averageTileSize * OPACITY_TRANSITION_TILES * 3; // Увеличиваем радиус поиска
-  const minDistanceToMask = distanceToTransparentMask(tileCenterX, tileCenterY, maskData, maxSearchDistance);
+  // Получаем вершины шестиугольника для определения bounding box
+  const vertices = getHexagonVertices(tileCenterX, tileCenterY, hexSide);
+  const minX = Math.min(...vertices.map(v => v.x));
+  const maxX = Math.max(...vertices.map(v => v.x));
+  const minY = Math.min(...vertices.map(v => v.y));
+  const maxY = Math.max(...vertices.map(v => v.y));
   
-  // Если не нашли прозрачную область в радиусе поиска - максимальная opacity
-  if (minDistanceToMask === Infinity) {
-    return MAX_OPACITY;
+  // Проверяем все точки в области тайла с шагом для оптимизации
+  // Используем шаг 2-3 пикселя для баланса между точностью и производительностью
+  const step = Math.max(1, Math.floor(hexSide / 20)); // Адаптивный шаг в зависимости от размера тайла
+  
+  for (let y = Math.floor(minY); y <= Math.ceil(maxY); y += step) {
+    for (let x = Math.floor(minX); x <= Math.ceil(maxX); x += step) {
+      // Проверяем, находится ли точка внутри шестиугольника
+      if (!isPointInHexagon(x, y, tileCenterX, tileCenterY, hexSide)) {
+        continue;
+      }
+      
+      // Проверяем границы маски
+      const px = Math.floor(x);
+      const py = Math.floor(y);
+      
+      if (px < 0 || px >= imgData.width || py < 0 || py >= imgData.height) {
+        continue;
+      }
+      
+      // Получаем alpha значение в этой точке
+      const idx = (py * imgData.width + px) * 4;
+      const alpha = imgData.data[idx + 3];
+      const alphaNormalized = alpha / 255;
+      
+      // Если хотя бы в одной точке alpha < 0.5, возвращаем MIN_OPACITY
+      if (alphaNormalized < 0.5) {
+        return MIN_OPACITY;
+      }
+    }
   }
   
-  // Применяем градиент: чем дальше от маски, тем больше opacity
-  // Используем средний размер тайла для вычисления расстояния перехода
-  // OPACITY_TRANSITION_TILES определяет количество тайлов для перехода
-  const transitionDistance = averageTileSize * OPACITY_TRANSITION_TILES;
-  
-  // Нормализуем расстояние (0 = на границе маски, 1 = далеко от маски)
-  const normalizedDistance = Math.min(minDistanceToMask / transitionDistance, 1);
-  
-  // Градиент от MIN_OPACITY (близко к маске) к MAX_OPACITY (далеко от маски)
-  const opacity = MIN_OPACITY + (MAX_OPACITY - MIN_OPACITY) * normalizedDistance;
-  
-  return Math.max(MIN_OPACITY, Math.min(MAX_OPACITY, opacity));
+  // Если все проверенные точки имеют alpha >= 0.5, возвращаем MAX_OPACITY
+  return MAX_OPACITY;
 }
 
 function App() {
@@ -1781,7 +1814,8 @@ function App() {
             mainImgWidth,
             mainImgHeight,
             currentMaskData,
-            averageTileSize
+            averageTileSize,
+            a // Размер стороны шестиугольника для проверки всей области тайла
           );
           
           // Применяем градиент прозрачности на границах главного фото
