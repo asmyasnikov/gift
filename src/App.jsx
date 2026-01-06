@@ -82,8 +82,9 @@ function invertImageAlpha(imageData) {
 }
 
 // Конвертирует maskData в data URL для использования в CSS mask-image
-// Инвертирует прозрачность исходной маски, расширяет на весь контейнер, затем снова инвертирует
-function maskDataToDataUrl(maskData, containerSize, mainImageSize) {
+// Инвертирует прозрачность исходной маски, расширяет на всю область тайлов (включая дополнительные области по краям на 1 тайл), затем снова инвертирует
+// tileSize - размер тайла (диаметр описанной окружности) для расширения маски
+function maskDataToDataUrl(maskData, containerSize, mainImageSize, tileSize = 0) {
   if (!maskData || !maskData.imageData) {
     return null;
   }
@@ -124,6 +125,173 @@ function maskDataToDataUrl(maskData, containerSize, mainImageSize) {
       mainImageSize.width,
       mainImageSize.height
     );
+    
+    // Шаг 2.5: Расширяем маску на всю область тайлов (включая дополнительные области по краям на 1 тайл)
+    // Без заливки белым - просто расширяем область, копируя края маски
+    if (tileSize > 0) {
+      // Убеждаемся, что mainImageSize.width и mainImageSize.height - целые числа
+      const maskWidth = Math.floor(mainImageSize.width);
+      const maskHeight = Math.floor(mainImageSize.height);
+      
+      // Получаем imageData области маски с целыми размерами
+      const maskImageData = ctx.getImageData(
+        Math.floor(mainImageSize.x),
+        Math.floor(mainImageSize.y),
+        maskWidth,
+        maskHeight
+      );
+      
+      // Расширяем на 1 тайл по всем краям, но не больше размера маски
+      // Убеждаемся, что expansion - целое число
+      const expansion = Math.floor(Math.min(tileSize, Math.min(maskWidth, maskHeight)));
+      
+      // Проверяем, что expansion > 0
+      if (expansion <= 0) {
+        // Если expansion <= 0, пропускаем расширение
+        const expandedImageData = ctx.getImageData(0, 0, containerSize.width, containerSize.height);
+        const finalImageData = invertImageAlpha(expandedImageData);
+        ctx.putImageData(finalImageData, 0, 0);
+        return canvas.toDataURL('image/png');
+      }
+      
+      // Расширяем вверх - копируем верхнюю строку
+      const topRow = new Uint8ClampedArray(maskImageData.data.slice(0, maskWidth * 4));
+      const topExpandedData = new Uint8ClampedArray(maskWidth * expansion * 4);
+      for (let y = 0; y < expansion; y++) {
+        const offset = y * maskWidth * 4;
+        for (let i = 0; i < topRow.length; i++) {
+          topExpandedData[offset + i] = topRow[i];
+        }
+      }
+      const topExpandedImageData = new ImageData(topExpandedData, maskWidth, expansion);
+      ctx.putImageData(topExpandedImageData, mainImageSize.x, mainImageSize.y - expansion);
+      
+      // Расширяем вниз - копируем нижнюю строку
+      const bottomRowStart = (maskHeight - 1) * maskWidth * 4;
+      const bottomRow = new Uint8ClampedArray(maskImageData.data.slice(bottomRowStart, bottomRowStart + maskWidth * 4));
+      const bottomExpandedData = new Uint8ClampedArray(maskWidth * expansion * 4);
+      for (let y = 0; y < expansion; y++) {
+        const offset = y * maskWidth * 4;
+        for (let i = 0; i < bottomRow.length; i++) {
+          bottomExpandedData[offset + i] = bottomRow[i];
+        }
+      }
+      const bottomExpandedImageData = new ImageData(bottomExpandedData, maskWidth, expansion);
+      ctx.putImageData(bottomExpandedImageData, mainImageSize.x, mainImageSize.y + mainImageSize.height);
+      
+      // Расширяем влево - копируем левый столбец
+      const leftColumn = new Uint8ClampedArray(maskHeight * 4);
+      for (let y = 0; y < maskHeight; y++) {
+        const pixelIndex = y * maskWidth * 4;
+        for (let i = 0; i < 4; i++) {
+          leftColumn[y * 4 + i] = maskImageData.data[pixelIndex + i];
+        }
+      }
+      const leftExpandedData = new Uint8ClampedArray(expansion * maskHeight * 4);
+      for (let x = 0; x < expansion; x++) {
+        for (let y = 0; y < maskHeight; y++) {
+          const srcIndex = y * 4;
+          const dstIndex = (x * maskHeight + y) * 4;
+          for (let i = 0; i < 4; i++) {
+            leftExpandedData[dstIndex + i] = leftColumn[srcIndex + i];
+          }
+        }
+      }
+      const leftExpandedImageData = new ImageData(leftExpandedData, expansion, maskHeight);
+      ctx.putImageData(leftExpandedImageData, mainImageSize.x - expansion, mainImageSize.y);
+      
+      // Расширяем вправо - копируем правый столбец
+      const rightColumn = new Uint8ClampedArray(maskHeight * 4);
+      for (let y = 0; y < maskHeight; y++) {
+        const pixelIndex = (y * maskWidth + maskWidth - 1) * 4;
+        for (let i = 0; i < 4; i++) {
+          rightColumn[y * 4 + i] = maskImageData.data[pixelIndex + i];
+        }
+      }
+      const rightExpandedData = new Uint8ClampedArray(expansion * maskHeight * 4);
+      for (let x = 0; x < expansion; x++) {
+        for (let y = 0; y < maskHeight; y++) {
+          const srcIndex = y * 4;
+          const dstIndex = (x * maskHeight + y) * 4;
+          for (let i = 0; i < 4; i++) {
+            rightExpandedData[dstIndex + i] = rightColumn[srcIndex + i];
+          }
+        }
+      }
+      const rightExpandedImageData = new ImageData(rightExpandedData, expansion, maskHeight);
+      ctx.putImageData(rightExpandedImageData, mainImageSize.x + mainImageSize.width, mainImageSize.y);
+      
+      // Расширяем углы - копируем угловые пиксели
+      // Верхний левый угол
+      const topLeftPixel = new Uint8ClampedArray(4);
+      for (let i = 0; i < 4; i++) {
+        topLeftPixel[i] = maskImageData.data[i];
+      }
+      const topLeftExpandedData = new Uint8ClampedArray(expansion * expansion * 4);
+      for (let y = 0; y < expansion; y++) {
+        for (let x = 0; x < expansion; x++) {
+          const dstIndex = (y * expansion + x) * 4;
+          for (let i = 0; i < 4; i++) {
+            topLeftExpandedData[dstIndex + i] = topLeftPixel[i];
+          }
+        }
+      }
+      const topLeftExpandedImageData = new ImageData(topLeftExpandedData, expansion, expansion);
+      ctx.putImageData(topLeftExpandedImageData, mainImageSize.x - expansion, mainImageSize.y - expansion);
+      
+      // Верхний правый угол
+      const topRightPixel = new Uint8ClampedArray(4);
+      const topRightPixelIndex = (maskWidth - 1) * 4;
+      for (let i = 0; i < 4; i++) {
+        topRightPixel[i] = maskImageData.data[topRightPixelIndex + i];
+      }
+      const topRightExpandedData = new Uint8ClampedArray(expansion * expansion * 4);
+      for (let y = 0; y < expansion; y++) {
+        for (let x = 0; x < expansion; x++) {
+          const dstIndex = (y * expansion + x) * 4;
+          for (let i = 0; i < 4; i++) {
+            topRightExpandedData[dstIndex + i] = topRightPixel[i];
+          }
+        }
+      }
+      const topRightExpandedImageData = new ImageData(topRightExpandedData, expansion, expansion);
+      ctx.putImageData(topRightExpandedImageData, mainImageSize.x + mainImageSize.width, mainImageSize.y - expansion);
+      
+      // Нижний левый угол
+      const bottomLeftPixel = new Uint8ClampedArray(4);
+      for (let i = 0; i < 4; i++) {
+        bottomLeftPixel[i] = maskImageData.data[bottomRowStart + i];
+      }
+      const bottomLeftExpandedData = new Uint8ClampedArray(expansion * expansion * 4);
+      for (let y = 0; y < expansion; y++) {
+        for (let x = 0; x < expansion; x++) {
+          const dstIndex = (y * expansion + x) * 4;
+          for (let i = 0; i < 4; i++) {
+            bottomLeftExpandedData[dstIndex + i] = bottomLeftPixel[i];
+          }
+        }
+      }
+      const bottomLeftExpandedImageData = new ImageData(bottomLeftExpandedData, expansion, expansion);
+      ctx.putImageData(bottomLeftExpandedImageData, mainImageSize.x - expansion, mainImageSize.y + mainImageSize.height);
+      
+      // Нижний правый угол
+      const bottomRightPixel = new Uint8ClampedArray(4);
+      const bottomRightPixelIndex = bottomRowStart + (maskWidth - 1) * 4;
+      for (let i = 0; i < 4; i++) {
+        bottomRightPixel[i] = maskImageData.data[bottomRightPixelIndex + i];
+      }
+      const bottomRightExpandedData = new Uint8ClampedArray(expansion * expansion * 4);
+      for (let y = 0; y < expansion; y++) {
+        for (let x = 0; x < expansion; x++) {
+          const dstIndex = (y * expansion + x) * 4;
+          for (let i = 0; i < 4; i++) {
+            bottomRightExpandedData[dstIndex + i] = bottomRightPixel[i];
+          }
+        }
+      }
+      const bottomRightExpandedImageData = new ImageData(bottomRightExpandedData, expansion, expansion);
+      ctx.putImageData(bottomRightExpandedImageData, mainImageSize.x + mainImageSize.width, mainImageSize.y + mainImageSize.height);
+    }
     
     // Шаг 3: Инвертируем прозрачность расширенной маски
     const expandedImageData = ctx.getImageData(0, 0, containerSize.width, containerSize.height);
@@ -2088,7 +2256,8 @@ function App() {
     // Расширяем маску на весь контейнер
     if (currentMaskData && mainImgWidth > 0 && mainImgHeight > 0) {
       const localMainImageSize = { width: mainImgWidth, height: mainImgHeight, x: mainImgX, y: mainImgY };
-      const maskUrl = maskDataToDataUrl(currentMaskData, containerSize, localMainImageSize);
+      // Передаем размер тайла (диаметр описанной окружности) для расширения маски вниз
+      const maskUrl = maskDataToDataUrl(currentMaskData, containerSize, localMainImageSize, d_описанная);
       setMaskImageUrl(maskUrl);
     } else {
       setMaskImageUrl(null);
