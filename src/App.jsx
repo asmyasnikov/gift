@@ -2646,7 +2646,6 @@ function App() {
           })()}
         </div>
 
-        <div className={`transition-overlay ${transitioning ? 'active' : ''}`} />
         </div>
 
         <button
