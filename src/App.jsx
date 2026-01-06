@@ -71,20 +71,66 @@ async function loadMask(maskFilename, canvasWidth, canvasHeight, containerSize, 
   }
 }
 
+// Инвертирует прозрачность изображения (alpha канал)
+function invertImageAlpha(imageData) {
+  const data = imageData.data;
+  for (let i = 3; i < data.length; i += 4) {
+    // Инвертируем alpha: 0 -> 255, 255 -> 0
+    data[i] = 255 - data[i];
+  }
+  return imageData;
+}
+
 // Конвертирует maskData в data URL для использования в CSS mask-image
-function maskDataToDataUrl(maskData) {
+// Инвертирует прозрачность исходной маски, расширяет на весь контейнер, затем снова инвертирует
+function maskDataToDataUrl(maskData, containerSize, mainImageSize) {
   if (!maskData || !maskData.imageData) {
     return null;
   }
   
   try {
+    // Шаг 1: Инвертируем прозрачность исходной маски
+    const invertedMaskData = new ImageData(
+      new Uint8ClampedArray(maskData.imageData.data),
+      maskData.imageData.width,
+      maskData.imageData.height
+    );
+    invertImageAlpha(invertedMaskData);
+    
+    // Шаг 2: Создаем canvas размером контейнера
     const canvas = document.createElement('canvas');
-    canvas.width = maskData.width;
-    canvas.height = maskData.height;
+    canvas.width = containerSize.width;
+    canvas.height = containerSize.height;
     const ctx = canvas.getContext('2d');
     
-    // Восстанавливаем изображение из imageData
-    ctx.putImageData(maskData.imageData, 0, 0);
+    // Заливаем весь canvas прозрачным (alpha = 0)
+    // Это будет область вокруг главного фото
+    ctx.clearRect(0, 0, containerSize.width, containerSize.height);
+    
+    // Создаем временный canvas для инвертированной маски
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = maskData.width;
+    maskCanvas.height = maskData.height;
+    const maskCtx = maskCanvas.getContext('2d');
+    
+    // Рисуем инвертированную маску на временном canvas
+    maskCtx.putImageData(invertedMaskData, 0, 0);
+    
+    // Рисуем инвертированную маску в позиции главного фото на основном canvas
+    ctx.drawImage(
+      maskCanvas,
+      mainImageSize.x,
+      mainImageSize.y,
+      mainImageSize.width,
+      mainImageSize.height
+    );
+    
+    // Шаг 3: Инвертируем прозрачность расширенной маски
+    const expandedImageData = ctx.getImageData(0, 0, containerSize.width, containerSize.height);
+    const finalImageData = invertImageAlpha(expandedImageData);
+    
+    // Применяем финальную инвертированную маску
+    ctx.putImageData(finalImageData, 0, 0);
     
     // Конвертируем в data URL
     return canvas.toDataURL('image/png');
@@ -2039,8 +2085,10 @@ function App() {
     setMaskData(currentMaskData);
     
     // Конвертируем maskData в data URL для CSS mask-image
-    if (currentMaskData) {
-      const maskUrl = maskDataToDataUrl(currentMaskData);
+    // Расширяем маску на весь контейнер
+    if (currentMaskData && mainImgWidth > 0 && mainImgHeight > 0) {
+      const localMainImageSize = { width: mainImgWidth, height: mainImgHeight, x: mainImgX, y: mainImgY };
+      const maskUrl = maskDataToDataUrl(currentMaskData, containerSize, localMainImageSize);
       setMaskImageUrl(maskUrl);
     } else {
       setMaskImageUrl(null);
@@ -2507,6 +2555,17 @@ function App() {
             height: containerSize.height,
             overflow: hoveredTileIndex !== null ? 'visible' : 'visible', // Разрешаем видимость для нижнего ряда
             overflowY: 'visible', // Разрешаем видимость по вертикали
+            // Применяем расширенную маску ко всей области тайлов
+            ...(maskImageUrl ? {
+              maskImage: `url(${maskImageUrl})`,
+              maskSize: '100% 100%',
+              maskPosition: '0 0',
+              maskRepeat: 'no-repeat',
+              WebkitMaskImage: `url(${maskImageUrl})`,
+              WebkitMaskSize: '100% 100%',
+              WebkitMaskPosition: '0 0',
+              WebkitMaskRepeat: 'no-repeat',
+            } : {})
           }}
           onClick={(e) => {
             // Сбрасываем активный тайл при клике вне тайла (только для мобильных)
@@ -2660,23 +2719,6 @@ function App() {
                 })))
               : 'none';
             
-            // Применяем маску только к тайлам, которые попадают на главное фото
-            const shouldApplyMask = tile.isOnMainImage && maskImageUrl && mainImageSize.width > 0;
-            const maskStyle = shouldApplyMask ? {
-              maskImage: `url(${maskImageUrl})`,
-              // Позиционируем маску относительно изображения внутри тайла
-              // Координаты маски должны быть относительно позиции тайла в контейнере
-              maskPosition: `${mainImageSize.x - tile.x}px ${mainImageSize.y - tile.y}px`,
-              maskSize: `${mainImageSize.width}px ${mainImageSize.height}px`,
-              maskRepeat: 'no-repeat',
-              maskOrigin: 'border-box', // Маска применяется относительно границы элемента
-              WebkitMaskImage: `url(${maskImageUrl})`,
-              WebkitMaskPosition: `${mainImageSize.x - tile.x}px ${mainImageSize.y - tile.y}px`,
-              WebkitMaskSize: `${mainImageSize.width}px ${mainImageSize.height}px`,
-              WebkitMaskRepeat: 'no-repeat',
-              WebkitMaskOrigin: 'border-box',
-            } : {};
-            
             return (
               <div
                 key={tileKey}
@@ -2717,11 +2759,9 @@ function App() {
                     filter: debugMode 
                       ? 'brightness(0) contrast(1)' // Черные прямоугольники в режиме отладки
                       : `none`,
-                    transition: 'opacity 0.3s ease',
                     width: '100%',
                     height: '100%',
                     objectFit: 'cover',
-                    ...maskStyle, // Применяем маску к изображению внутри тайла
                     ...(debugMode && {
                       border: '1px solid rgba(255, 255, 255, 0.3)', // Белая рамка для визуализации
                       boxSizing: 'border-box'
