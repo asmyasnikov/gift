@@ -2310,38 +2310,7 @@ function App() {
           tileImg.src = cachedUrl || tileUrl;
           
           tileImg.onload = () => {
-            // Масштабируем координаты и размеры тайла
-            // Используем scaleFactor для масштабирования относительно контейнера
-            const x = tile.x * scaleFactor;
-            const y = tile.y * scaleFactor;
-            const width = tile.width * scaleFactor;
-            const height = tile.height * scaleFactor;
-            
-            // Сохраняем состояние контекста
-            highResCtx.save();
-            
-            // Применяем opacity
-            highResCtx.globalAlpha = tile.opacity || MIN_OPACITY;
-            
-            // Применяем фильтры (brightness и saturate через canvas не поддерживаются напрямую,
-            // но можно использовать composite operations или нарисовать через фильтрованный canvas)
-            const filterCanvas = document.createElement('canvas');
-            filterCanvas.width = tileImg.width;
-            filterCanvas.height = tileImg.height;
-            const filterCtx = filterCanvas.getContext('2d');
-            
-            // Применяем brightness и saturate через фильтры (если не в debug режиме)
-            if (!debugMode) {
-              filterCtx.filter = `none`;
-            }
-            filterCtx.drawImage(tileImg, 0, 0);
-            
-            // Рисуем отфильтрованное изображение на основном canvas
-            highResCtx.drawImage(filterCanvas, x, y, width, height);
-            
-            // Восстанавливаем состояние
-            highResCtx.restore();
-            
+            // Fix it
             resolve();
           };
           tileImg.onerror = () => resolve(); // Пропускаем ошибки загрузки
@@ -2759,9 +2728,6 @@ function App() {
                     e.target.style.display = 'none';
                   }}
                   style={{
-                    filter: debugMode 
-                      ? 'brightness(0) contrast(1)' // Черные прямоугольники в режиме отладки
-                      : `none`,
                     width: '100%',
                     height: '100%',
                     objectFit: 'cover',
