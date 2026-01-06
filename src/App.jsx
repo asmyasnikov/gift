@@ -37,17 +37,6 @@ const HEXAGON_VERTICAL_SPACING_MULTIPLIER = 1.6;
 // Значение в множителях диаметра описанной окружности соты (1.0 = 1 сота, 1.5 = 1.5 соты, 2.0 = 2 соты)
 const BORDER_GRADIENT_WIDTH_MULTIPLIER = 1.5;
 
-// Минимальная opacity на границе главного фото (для плавного перехода)
-// Значение от 0.0 (полная прозрачность) до 1.0 (без изменений)
-const BORDER_MIN_OPACITY = 0.0;
-
-// Функция для плавного перехода (smoothstep)
-// Возвращает значение от 0 до 1 с плавным переходом
-function smoothstep(edge0, edge1, x) {
-  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
-}
-
 // Загрузка маски для фото
 // Маска - это PNG файл с альфа-каналом, где прозрачные области = области с min opacity
 async function loadMask(maskFilename, canvasWidth, canvasHeight, containerSize, maskUrl = null) {
@@ -1794,32 +1783,17 @@ function App() {
           const distToTop = maskY;
           const distToBottom = mainImgHeight - maskY;
           
-          // Для горизонтальных границ используем немного больший градиент для лучшего эффекта
-          const horizontalGradientWidth = borderGradientWidthValue * 1.2;
-          const verticalGradientWidth = borderGradientWidthValue;
+          // Находим минимальное расстояние до границы
+          const minDistToBorder = Math.min(distToLeft, distToRight, distToTop, distToBottom);
           
-          // Применяем градиент отдельно для горизонтальных и вертикальных границ
-          let horizontalOpacityFactor = 1.0;
-          let verticalOpacityFactor = 1.0;
-          
-          // Проверяем горизонтальные границы (левая/правая)
-          if (distToLeft < horizontalGradientWidth || distToRight < horizontalGradientWidth) {
-            const minHorizontalDist = Math.min(distToLeft, distToRight);
-            horizontalOpacityFactor = smoothstep(0, horizontalGradientWidth, minHorizontalDist);
+          // Если сота находится в зоне градиента (ближе к краю, чем ширина градиента)
+          if (minDistToBorder < borderGradientWidthValue) {
+            // Вычисляем коэффициент прозрачности: от 0 (на краю) до 1 (на расстоянии borderGradientWidthValue)
+            const borderOpacityFactor = minDistToBorder / borderGradientWidthValue;
+            // Применяем градиент: на краю opacity минимальная (MIN_OPACITY), на расстоянии borderGradientWidth - исходная opacity
+            const borderOpacity = opacity * borderOpacityFactor;
+            opacity = borderOpacity;
           }
-          
-          // Проверяем вертикальные границы (верхняя/нижняя)
-          if (distToTop < verticalGradientWidth || distToBottom < verticalGradientWidth) {
-            const minVerticalDist = Math.min(distToTop, distToBottom);
-            verticalOpacityFactor = smoothstep(0, verticalGradientWidth, minVerticalDist);
-          }
-          
-          // Комбинируем факторы прозрачности (используем минимум для более сильного эффекта на углах)
-          const combinedOpacityFactor = Math.min(horizontalOpacityFactor, verticalOpacityFactor);
-          
-          // Применяем градиент: на краю opacity = opacity * BORDER_MIN_OPACITY, на расстоянии градиента - исходная opacity
-          const borderOpacity = opacity * (BORDER_MIN_OPACITY + (1 - BORDER_MIN_OPACITY) * combinedOpacityFactor);
-          opacity = borderOpacity;
         }
         
         allTiles.push({
@@ -2423,76 +2397,35 @@ function App() {
               objectFit: 'contain',
               zIndex: 1,
               // Добавляем градиент прозрачности на границах главного фото
-              // Используем процентные значения для более надежной работы при разных размерах изображения
-              ...(borderGradientWidth > 0 && mainImageSize.width > 0 && mainImageSize.height > 0 ? (() => {
-                // Вычисляем процентную ширину градиента относительно размера изображения
-                // Для горизонтальных границ используем немного больший градиент для лучшего эффекта
-                const gradientWidthPercent = Math.min((borderGradientWidth * 1.2 / mainImageSize.width) * 100, 25); // Увеличиваем на 20% и ограничиваем максимум 25%
-                const gradientHeightPercent = Math.min((borderGradientWidth / mainImageSize.height) * 100, 20); // Ограничиваем максимум 20%
-                
-                // Используем более плавную функцию для градиента с большим количеством промежуточных точек
-                // Для горизонтальных границ (левая/правая) используем более широкий градиент
-                return {
-                  maskImage: `
-                    linear-gradient(to right, 
-                      transparent 0%, 
-                      rgba(0, 0, 0, 0.05) ${gradientWidthPercent * 0.1}%,
-                      rgba(0, 0, 0, 0.2) ${gradientWidthPercent * 0.3}%,
-                      rgba(0, 0, 0, 0.5) ${gradientWidthPercent * 0.6}%,
-                      rgba(0, 0, 0, 0.8) ${gradientWidthPercent * 0.85}%,
-                      black ${gradientWidthPercent}%, 
-                      black calc(100% - ${gradientWidthPercent}%), 
-                      rgba(0, 0, 0, 0.8) calc(100% - ${gradientWidthPercent * 0.85}%),
-                      rgba(0, 0, 0, 0.5) calc(100% - ${gradientWidthPercent * 0.6}%),
-                      rgba(0, 0, 0, 0.2) calc(100% - ${gradientWidthPercent * 0.3}%),
-                      rgba(0, 0, 0, 0.05) calc(100% - ${gradientWidthPercent * 0.1}%),
-                      transparent 100%),
-                    linear-gradient(to bottom, 
-                      transparent 0%, 
-                      rgba(0, 0, 0, 0.05) ${gradientHeightPercent * 0.1}%,
-                      rgba(0, 0, 0, 0.2) ${gradientHeightPercent * 0.3}%,
-                      rgba(0, 0, 0, 0.5) ${gradientHeightPercent * 0.6}%,
-                      rgba(0, 0, 0, 0.8) ${gradientHeightPercent * 0.85}%,
-                      black ${gradientHeightPercent}%, 
-                      black calc(100% - ${gradientHeightPercent}%), 
-                      rgba(0, 0, 0, 0.8) calc(100% - ${gradientHeightPercent * 0.85}%),
-                      rgba(0, 0, 0, 0.5) calc(100% - ${gradientHeightPercent * 0.6}%),
-                      rgba(0, 0, 0, 0.2) calc(100% - ${gradientHeightPercent * 0.3}%),
-                      rgba(0, 0, 0, 0.05) calc(100% - ${gradientHeightPercent * 0.1}%),
-                      transparent 100%)
-                  `,
-                  maskComposite: 'intersect',
-                  WebkitMaskImage: `
-                    linear-gradient(to right, 
-                      transparent 0%, 
-                      rgba(0, 0, 0, 0.05) ${gradientWidthPercent * 0.1}%,
-                      rgba(0, 0, 0, 0.2) ${gradientWidthPercent * 0.3}%,
-                      rgba(0, 0, 0, 0.5) ${gradientWidthPercent * 0.6}%,
-                      rgba(0, 0, 0, 0.8) ${gradientWidthPercent * 0.85}%,
-                      black ${gradientWidthPercent}%, 
-                      black calc(100% - ${gradientWidthPercent}%), 
-                      rgba(0, 0, 0, 0.8) calc(100% - ${gradientWidthPercent * 0.85}%),
-                      rgba(0, 0, 0, 0.5) calc(100% - ${gradientWidthPercent * 0.6}%),
-                      rgba(0, 0, 0, 0.2) calc(100% - ${gradientWidthPercent * 0.3}%),
-                      rgba(0, 0, 0, 0.05) calc(100% - ${gradientWidthPercent * 0.1}%),
-                      transparent 100%),
-                    linear-gradient(to bottom, 
-                      transparent 0%, 
-                      rgba(0, 0, 0, 0.05) ${gradientHeightPercent * 0.1}%,
-                      rgba(0, 0, 0, 0.2) ${gradientHeightPercent * 0.3}%,
-                      rgba(0, 0, 0, 0.5) ${gradientHeightPercent * 0.6}%,
-                      rgba(0, 0, 0, 0.8) ${gradientHeightPercent * 0.85}%,
-                      black ${gradientHeightPercent}%, 
-                      black calc(100% - ${gradientHeightPercent}%), 
-                      rgba(0, 0, 0, 0.8) calc(100% - ${gradientHeightPercent * 0.85}%),
-                      rgba(0, 0, 0, 0.5) calc(100% - ${gradientHeightPercent * 0.6}%),
-                      rgba(0, 0, 0, 0.2) calc(100% - ${gradientHeightPercent * 0.3}%),
-                      rgba(0, 0, 0, 0.05) calc(100% - ${gradientHeightPercent * 0.1}%),
-                      transparent 100%)
-                  `,
-                  WebkitMaskComposite: 'source-in'
-                };
-              })() : {})
+              // Используем четыре градиента для каждой стороны и объединяем их
+              ...(borderGradientWidth > 0 ? {
+                maskImage: `
+                  linear-gradient(to right, 
+                    transparent 0%, 
+                    black ${borderGradientWidth}px, 
+                    black calc(100% - ${borderGradientWidth}px), 
+                    transparent 100%),
+                  linear-gradient(to bottom, 
+                    transparent 0%, 
+                    black ${borderGradientWidth}px, 
+                    black calc(100% - ${borderGradientWidth}px), 
+                    transparent 100%)
+                `,
+                maskComposite: 'intersect',
+                WebkitMaskImage: `
+                  linear-gradient(to right, 
+                    transparent 0%, 
+                    black ${borderGradientWidth}px, 
+                    black calc(100% - ${borderGradientWidth}px), 
+                    transparent 100%),
+                  linear-gradient(to bottom, 
+                    transparent 0%, 
+                    black ${borderGradientWidth}px, 
+                    black calc(100% - ${borderGradientWidth}px), 
+                    transparent 100%)
+                `,
+                WebkitMaskComposite: 'source-in'
+              } : {})
             }}
           />
         )}
