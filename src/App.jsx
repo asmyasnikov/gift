@@ -7,8 +7,8 @@ const VARIANCE_THRESHOLD = 800;
 const MAX_CANVAS_SIZE = 512;
 
 // Константы для opacity тайлов
-const MIN_OPACITY = 0.1; // Минимальная прозрачность в центре (лицо/центр кадра)
-const MAX_OPACITY = 1.0;  // Максимальная прозрачность на краях
+const MIN_OPACITY = 0.1; // Минимальная прозрачность (тайлы не видны над непрозрачными частями PNG маски)
+const MAX_OPACITY = 1.0;  // Максимальная прозрачность (тайлы видны над прозрачными частями PNG маски)
 
 // Константа для градиента opacity за пределами маски
 // Определяет количество тайлов от границы прозрачной области маски, на котором происходит переход от MIN_OPACITY к MAX_OPACITY
@@ -30,7 +30,8 @@ const HEXAGON_VERTICAL_SPACING_MULTIPLIER = 1.55;
 
 
 // Загрузка маски для фото
-// Маска - это PNG файл с альфа-каналом, где прозрачные области = области с min opacity
+// Маска - это PNG файл с альфа-каналом (само главное фото)
+// Прозрачные области = тайлы видны, непрозрачные области = тайлы не видны
 async function loadMask(maskFilename, canvasWidth, canvasHeight, containerSize, maskUrl = null) {
   try {
     const maskImg = new Image();
@@ -67,18 +68,12 @@ async function loadMask(maskFilename, canvasWidth, canvasHeight, containerSize, 
   }
 }
 
-// Инвертирует прозрачность изображения (alpha канал)
-function invertImageAlpha(imageData) {
-  const data = imageData.data;
-  for (let i = 3; i < data.length; i += 4) {
-    // Инвертируем alpha: 0 -> 255, 255 -> 0
-    data[i] = 255 - data[i];
-  }
-  return imageData;
-}
 
 // Конвертирует maskData в data URL для использования в CSS mask-image
-// Инвертирует прозрачность исходной маски, расширяет на всю область тайлов (включая дополнительные области по краям на 1 тайл), затем снова инвертирует
+// Расширяет маску на всю область тайлов (включая дополнительные области по краям на 1 тайл)
+// В CSS mask-image: прозрачные части маски = элемент виден, непрозрачные части = элемент скрыт
+// PNG прозрачен (alpha = 0) -> маска прозрачна (alpha = 0) -> тайлы видны
+// PNG непрозрачен (alpha = 255) -> маска непрозрачна (alpha = 255) -> тайлы скрыты
 // tileSize - размер тайла (диаметр описанной окружности) для расширения маски
 function maskDataToDataUrl(maskData, containerSize, mainImageSize, tileSize = 0) {
   if (!maskData || !maskData.imageData) {
@@ -86,34 +81,34 @@ function maskDataToDataUrl(maskData, containerSize, mainImageSize, tileSize = 0)
   }
   
   try {
-    // Шаг 1: Инвертируем прозрачность исходной маски
-    const invertedMaskData = new ImageData(
-      new Uint8ClampedArray(maskData.imageData.data),
-      maskData.imageData.width,
-      maskData.imageData.height
-    );
-    invertImageAlpha(invertedMaskData);
-    
-    // Шаг 2: Создаем canvas размером контейнера
+    // Шаг 1: Создаем canvas размером контейнера
     const canvas = document.createElement('canvas');
     canvas.width = containerSize.width;
     canvas.height = containerSize.height;
     const ctx = canvas.getContext('2d');
     
-    // Заливаем весь canvas прозрачным (alpha = 0)
-    // Это будет область вокруг главного фото
-    ctx.clearRect(0, 0, containerSize.width, containerSize.height);
+    // Заливаем весь canvas непрозрачным белым (alpha = 255)
+    // В CSS mask-image: прозрачные части = элемент виден, непрозрачные = элемент скрыт
+    // Область вокруг главного фото должна быть прозрачной -> тайлы видны везде
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, containerSize.width, containerSize.height);
     
-    // Создаем временный canvas для инвертированной маски
+    // Создаем временный canvas для маски
     const maskCanvas = document.createElement('canvas');
     maskCanvas.width = maskData.width;
     maskCanvas.height = maskData.height;
     const maskCtx = maskCanvas.getContext('2d');
     
-    // Рисуем инвертированную маску на временном canvas
-    maskCtx.putImageData(invertedMaskData, 0, 0);
+    // Рисуем маску на временном canvas (БЕЗ инверсии)
+    // PNG прозрачен (alpha = 0) -> маска прозрачна (alpha = 0) -> тайлы видны
+    // PNG непрозрачен (alpha = 255) -> маска непрозрачна (alpha = 255) -> тайлы скрыты
+    maskCtx.putImageData(maskData.imageData, 0, 0);
     
-    // Рисуем инвертированную маску в позиции главного фото на основном canvas
+    // Рисуем маску в позиции главного фото на основном canvas
+    // Используем destination-out чтобы вырезать прозрачные части из белого фона
+    // Это создаст прозрачные области там, где PNG прозрачен
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
     ctx.drawImage(
       maskCanvas,
       mainImageSize.x,
@@ -121,6 +116,7 @@ function maskDataToDataUrl(maskData, containerSize, mainImageSize, tileSize = 0)
       mainImageSize.width,
       mainImageSize.height
     );
+    ctx.restore();
     
     // Шаг 2.5: Расширяем маску на всю область тайлов (включая дополнительные области по краям на 1 тайл)
     // Без заливки белым - просто расширяем область, копируя края маски
@@ -144,157 +140,15 @@ function maskDataToDataUrl(maskData, containerSize, mainImageSize, tileSize = 0)
       // Проверяем, что expansion > 0
       if (expansion <= 0) {
         // Если expansion <= 0, пропускаем расширение
-        const expandedImageData = ctx.getImageData(0, 0, containerSize.width, containerSize.height);
-        const finalImageData = invertImageAlpha(expandedImageData);
-        ctx.putImageData(finalImageData, 0, 0);
+        // Маска уже нарисована, расширенные области остаются прозрачными
         return canvas.toDataURL('image/png');
       }
       
-      // Расширяем вверх - копируем верхнюю строку
-      const topRow = new Uint8ClampedArray(maskImageData.data.slice(0, maskWidth * 4));
-      const topExpandedData = new Uint8ClampedArray(maskWidth * expansion * 4);
-      for (let y = 0; y < expansion; y++) {
-        const offset = y * maskWidth * 4;
-        for (let i = 0; i < topRow.length; i++) {
-          topExpandedData[offset + i] = topRow[i];
-        }
-      }
-      const topExpandedImageData = new ImageData(topExpandedData, maskWidth, expansion);
-      ctx.putImageData(topExpandedImageData, mainImageSize.x, mainImageSize.y - expansion);
-      
-      // Расширяем вниз - копируем нижнюю строку
-      const bottomRowStart = (maskHeight - 1) * maskWidth * 4;
-      const bottomRow = new Uint8ClampedArray(maskImageData.data.slice(bottomRowStart, bottomRowStart + maskWidth * 4));
-      const bottomExpandedData = new Uint8ClampedArray(maskWidth * expansion * 4);
-      for (let y = 0; y < expansion; y++) {
-        const offset = y * maskWidth * 4;
-        for (let i = 0; i < bottomRow.length; i++) {
-          bottomExpandedData[offset + i] = bottomRow[i];
-        }
-      }
-      const bottomExpandedImageData = new ImageData(bottomExpandedData, maskWidth, expansion);
-      ctx.putImageData(bottomExpandedImageData, mainImageSize.x, mainImageSize.y + mainImageSize.height);
-      
-      // Расширяем влево - копируем левый столбец
-      const leftColumn = new Uint8ClampedArray(maskHeight * 4);
-      for (let y = 0; y < maskHeight; y++) {
-        const pixelIndex = y * maskWidth * 4;
-        for (let i = 0; i < 4; i++) {
-          leftColumn[y * 4 + i] = maskImageData.data[pixelIndex + i];
-        }
-      }
-      const leftExpandedData = new Uint8ClampedArray(expansion * maskHeight * 4);
-      for (let x = 0; x < expansion; x++) {
-        for (let y = 0; y < maskHeight; y++) {
-          const srcIndex = y * 4;
-          const dstIndex = (x * maskHeight + y) * 4;
-          for (let i = 0; i < 4; i++) {
-            leftExpandedData[dstIndex + i] = leftColumn[srcIndex + i];
-          }
-        }
-      }
-      const leftExpandedImageData = new ImageData(leftExpandedData, expansion, maskHeight);
-      ctx.putImageData(leftExpandedImageData, mainImageSize.x - expansion, mainImageSize.y);
-      
-      // Расширяем вправо - копируем правый столбец
-      const rightColumn = new Uint8ClampedArray(maskHeight * 4);
-      for (let y = 0; y < maskHeight; y++) {
-        const pixelIndex = (y * maskWidth + maskWidth - 1) * 4;
-        for (let i = 0; i < 4; i++) {
-          rightColumn[y * 4 + i] = maskImageData.data[pixelIndex + i];
-        }
-      }
-      const rightExpandedData = new Uint8ClampedArray(expansion * maskHeight * 4);
-      for (let x = 0; x < expansion; x++) {
-        for (let y = 0; y < maskHeight; y++) {
-          const srcIndex = y * 4;
-          const dstIndex = (x * maskHeight + y) * 4;
-          for (let i = 0; i < 4; i++) {
-            rightExpandedData[dstIndex + i] = rightColumn[srcIndex + i];
-          }
-        }
-      }
-      const rightExpandedImageData = new ImageData(rightExpandedData, expansion, maskHeight);
-      ctx.putImageData(rightExpandedImageData, mainImageSize.x + mainImageSize.width, mainImageSize.y);
-      
-      // Расширяем углы - копируем угловые пиксели
-      // Верхний левый угол
-      const topLeftPixel = new Uint8ClampedArray(4);
-      for (let i = 0; i < 4; i++) {
-        topLeftPixel[i] = maskImageData.data[i];
-      }
-      const topLeftExpandedData = new Uint8ClampedArray(expansion * expansion * 4);
-      for (let y = 0; y < expansion; y++) {
-        for (let x = 0; x < expansion; x++) {
-          const dstIndex = (y * expansion + x) * 4;
-          for (let i = 0; i < 4; i++) {
-            topLeftExpandedData[dstIndex + i] = topLeftPixel[i];
-          }
-        }
-      }
-      const topLeftExpandedImageData = new ImageData(topLeftExpandedData, expansion, expansion);
-      ctx.putImageData(topLeftExpandedImageData, mainImageSize.x - expansion, mainImageSize.y - expansion);
-      
-      // Верхний правый угол
-      const topRightPixel = new Uint8ClampedArray(4);
-      const topRightPixelIndex = (maskWidth - 1) * 4;
-      for (let i = 0; i < 4; i++) {
-        topRightPixel[i] = maskImageData.data[topRightPixelIndex + i];
-      }
-      const topRightExpandedData = new Uint8ClampedArray(expansion * expansion * 4);
-      for (let y = 0; y < expansion; y++) {
-        for (let x = 0; x < expansion; x++) {
-          const dstIndex = (y * expansion + x) * 4;
-          for (let i = 0; i < 4; i++) {
-            topRightExpandedData[dstIndex + i] = topRightPixel[i];
-          }
-        }
-      }
-      const topRightExpandedImageData = new ImageData(topRightExpandedData, expansion, expansion);
-      ctx.putImageData(topRightExpandedImageData, mainImageSize.x + mainImageSize.width, mainImageSize.y - expansion);
-      
-      // Нижний левый угол
-      const bottomLeftPixel = new Uint8ClampedArray(4);
-      for (let i = 0; i < 4; i++) {
-        bottomLeftPixel[i] = maskImageData.data[bottomRowStart + i];
-      }
-      const bottomLeftExpandedData = new Uint8ClampedArray(expansion * expansion * 4);
-      for (let y = 0; y < expansion; y++) {
-        for (let x = 0; x < expansion; x++) {
-          const dstIndex = (y * expansion + x) * 4;
-          for (let i = 0; i < 4; i++) {
-            bottomLeftExpandedData[dstIndex + i] = bottomLeftPixel[i];
-          }
-        }
-      }
-      const bottomLeftExpandedImageData = new ImageData(bottomLeftExpandedData, expansion, expansion);
-      ctx.putImageData(bottomLeftExpandedImageData, mainImageSize.x - expansion, mainImageSize.y + mainImageSize.height);
-      
-      // Нижний правый угол
-      const bottomRightPixel = new Uint8ClampedArray(4);
-      const bottomRightPixelIndex = bottomRowStart + (maskWidth - 1) * 4;
-      for (let i = 0; i < 4; i++) {
-        bottomRightPixel[i] = maskImageData.data[bottomRightPixelIndex + i];
-      }
-      const bottomRightExpandedData = new Uint8ClampedArray(expansion * expansion * 4);
-      for (let y = 0; y < expansion; y++) {
-        for (let x = 0; x < expansion; x++) {
-          const dstIndex = (y * expansion + x) * 4;
-          for (let i = 0; i < 4; i++) {
-            bottomRightExpandedData[dstIndex + i] = bottomRightPixel[i];
-          }
-        }
-      }
-      const bottomRightExpandedImageData = new ImageData(bottomRightExpandedData, expansion, expansion);
-      ctx.putImageData(bottomRightExpandedImageData, mainImageSize.x + mainImageSize.width, mainImageSize.y + mainImageSize.height);
+      // Расширяем маску на всю область тайлов
+      // Расширенные части должны быть прозрачными (тайлы видны)
+      // Поэтому мы НЕ копируем края маски, а оставляем расширенные области прозрачными
+      // Расширенные области уже прозрачны (clearRect), поэтому ничего не делаем
     }
-    
-    // Шаг 3: Инвертируем прозрачность расширенной маски
-    const expandedImageData = ctx.getImageData(0, 0, containerSize.width, containerSize.height);
-    const finalImageData = invertImageAlpha(expandedImageData);
-    
-    // Применяем финальную инвертированную маску
-    ctx.putImageData(finalImageData, 0, 0);
     
     // Конвертируем в data URL
     return canvas.toDataURL('image/png');
@@ -307,14 +161,14 @@ function maskDataToDataUrl(maskData, containerSize, mainImageSize, tileSize = 0)
 
 // Создает маску для главного изображения из исходного URL маски PNG
 // Масштабирует маску до размера главного изображения без расширения
-// Инвертирует прозрачность маски (показывает только прозрачные области исходной маски)
+// Прозрачные части маски = тайлы видны, непрозрачные части = тайлы не видны
 async function createMainImageMaskFromUrl(maskUrl, mainImageSize) {
   if (!maskUrl || mainImageSize.width <= 0 || mainImageSize.height <= 0) {
     return null;
   }
   
   try {
-    // Загружаем исходную маску PNG
+    // Загружаем исходную маску PNG (само главное фото)
     const maskImg = new Image();
     maskImg.crossOrigin = 'anonymous';
     
@@ -331,12 +185,8 @@ async function createMainImageMaskFromUrl(maskUrl, mainImageSize) {
     const ctx = canvas.getContext('2d');
     
     // Рисуем маску, масштабируя до размера главного изображения
+    // Без инверсии - прозрачные части = тайлы видны, непрозрачные = тайлы не видны
     ctx.drawImage(maskImg, 0, 0, mainImageSize.width, mainImageSize.height);
-    
-    // Инвертируем прозрачность маски (альфа-канал)
-    const imageData = ctx.getImageData(0, 0, mainImageSize.width, mainImageSize.height);
-    const invertedImageData = invertImageAlpha(imageData);
-    ctx.putImageData(invertedImageData, 0, 0);
     
     // Конвертируем в data URL
     return canvas.toDataURL('image/png');
@@ -1164,8 +1014,8 @@ function findBestMatch(targetColor, photoColors, usageCount, excludedIndices = n
 
 // Вычисляет opacity тайла на основе маски
 // Проверяет alpha по всей области тайла (шестиугольника)
-// Если в любом месте под тайлом alpha < 0.5 (128 из 255) - устанавливаем MIN_OPACITY
-// Если везде alpha >= 0.5 - устанавливаем MAX_OPACITY
+// Прозрачные части маски (alpha < 0.5) = тайлы видны (MAX_OPACITY)
+// Непрозрачные части маски (alpha >= 0.5) = тайлы не видны (MIN_OPACITY)
 function calculateTileOpacity(tileCenterX, tileCenterY, containerWidth, containerHeight, maskData = null, averageTileSize = 50, hexSide = null) {
   // Если нет маски - все тайлы с максимальной opacity
   if (!maskData || !maskData.imageData) {
@@ -1189,7 +1039,9 @@ function calculateTileOpacity(tileCenterX, tileCenterY, containerWidth, containe
     const alpha = imgData.data[idx + 3];
     const alphaNormalized = alpha / 255;
     
-    return alphaNormalized < 0.5 ? MIN_OPACITY : MAX_OPACITY;
+    // Прозрачные части (alpha < 0.5) = тайлы видны (MAX_OPACITY)
+    // Непрозрачные части (alpha >= 0.5) = тайлы не видны (MIN_OPACITY)
+    return alphaNormalized < 0.5 ? MAX_OPACITY : MIN_OPACITY;
   }
   
   // Получаем вершины шестиугольника для определения bounding box
@@ -1223,14 +1075,16 @@ function calculateTileOpacity(tileCenterX, tileCenterY, containerWidth, containe
       const alpha = imgData.data[idx + 3];
       const alphaNormalized = alpha / 255;
       
-      // Если хотя бы в одной точке alpha < 0.5, возвращаем MIN_OPACITY
-      if (alphaNormalized < 0.5) {
+      // Если хотя бы в одной точке alpha >= 0.5 (непрозрачно), возвращаем MIN_OPACITY
+      // Тайл не должен быть виден над непрозрачной частью маски
+      if (alphaNormalized >= 0.5) {
         return MIN_OPACITY;
       }
     }
   }
   
-  // Если все проверенные точки имеют alpha >= 0.5, возвращаем MAX_OPACITY
+  // Если все проверенные точки имеют alpha < 0.5 (прозрачно), возвращаем MAX_OPACITY
+  // Тайл должен быть виден над прозрачной частью маски
   return MAX_OPACITY;
 }
 
@@ -1318,103 +1172,37 @@ function App() {
       .then(async (data) => {
         setPhotoIndex(data);
         
-        // Проверяем наличие масок для ВСЕХ фото
-        // Фото считается главным только если у него есть PNG маска
+        // Проверяем PNG файлы - это главные фото
+        // PNG файл сам является маской (прозрачные части = тайлы видны, непрозрачные = тайлы не видны)
         const slideshowList = [];
         
         if (debugMode) {
-          console.log('[DEBUG] Проверка масок для всех фото...', {
+          console.log('[DEBUG] Проверка PNG файлов (главные фото)...', {
             totalPhotos: data.photos.length
           });
         }
         
-        // Проверяем наличие масок параллельно для всех фото
-        const checkPromises = data.photos.map(async (photo) => {
-          // Проверяем только JPG/JPEG файлы (не PNG)
+        // Проверяем PNG файлы - это главные фото
+        data.photos.forEach((photo) => {
           const ext = photo.filename.toLowerCase();
-          if (!ext.endsWith('.jpg') && !ext.endsWith('.jpeg')) {
-            return { photo, hasMask: false, reason: 'not_jpg' };
-          }
-          
-          const baseName = photo.filename.replace(/\.(jpg|jpeg)$/i, '');
-          const maskFilename = `${baseName}.png`;
-          const maskUrl = `/photos/${maskFilename}`;
-          
-          // Проверяем наличие маски через GET запрос (более надежно, чем HEAD)
-          // Используем небольшой range запрос чтобы не загружать весь файл
-          try {
-            const response = await fetch(maskUrl, { 
-              method: 'GET',
-              headers: {
-                'Range': 'bytes=0-0' // Запрашиваем только первый байт
-              },
-              cache: 'no-cache' // Отключаем кэш для точной проверки
-            });
-            
-            // Проверяем статус и content-type
-            const contentType = response.headers.get('content-type');
-            const isImage = contentType && (contentType.startsWith('image/') || contentType.includes('png'));
-            
-            // 206 = Partial Content (файл существует), 200 = OK (файл существует)
-            const fileExists = response.status === 200 || response.status === 206;
-            
-            if (fileExists && isImage) {
-              if (debugMode) {
-                console.log('[DEBUG] Маска найдена:', maskFilename, {
-                  status: response.status,
-                  contentType,
-                  filename: photo.filename
-                });
-              }
-              return { photo, hasMask: true };
-            } else {
-              if (debugMode) {
-                console.log('[DEBUG] Маска не найдена:', maskFilename, {
-                  status: response.status,
-                  contentType,
-                  fileExists,
-                  isImage,
-                  filename: photo.filename
-                });
-              }
-              return { photo, hasMask: false, reason: 'not_found' };
-            }
-          } catch (e) {
-            // Маска не найдена (404 или другая ошибка)
-            if (debugMode) {
-              console.log('[DEBUG] Ошибка проверки маски:', maskFilename, {
-                error: e.message,
-                filename: photo.filename
-              });
-            }
-            return { photo, hasMask: false, reason: 'error', error: e.message };
-          }
-        });
-        
-        const results = await Promise.all(checkPromises);
-        
-        // Добавляем в слайд-шоу только фото с масками
-        results.forEach(({ photo, hasMask, reason }) => {
-          if (hasMask) {
+          // Главные фото - это PNG файлы
+          if (ext.endsWith('.png')) {
             slideshowList.push(photo);
+            if (debugMode) {
+              console.log('[DEBUG] Главное фото найдено (PNG):', photo.filename);
+            }
           }
         });
         
-        if (debugMode) {
-          console.log('[DEBUG] Фото в слайд-шоу (с масками):', {
-            totalPhotos: data.photos.length,
-            withMasks: slideshowList.length,
-            photos: slideshowList.map(p => p.filename)
-          });
-          
-          // Показываем статистику по причинам исключения
-          const stats = {};
-          results.forEach(({ reason }) => {
-            if (reason) {
-              stats[reason] = (stats[reason] || 0) + 1;
-            }
-          });
-          console.log('[DEBUG] Статистика исключений:', stats);
+        console.log('[DEBUG] Фото в слайд-шоу (PNG файлы):', {
+          totalPhotos: data.photos.length,
+          pngPhotos: slideshowList.length,
+          photos: slideshowList.map(p => p.filename),
+          allExtensions: [...new Set(data.photos.map(p => p.filename.split('.').pop().toLowerCase()))]
+        });
+        
+        if (slideshowList.length === 0) {
+          console.warn('[WARN] Не найдено PNG файлов в index.json! Все файлы должны быть PNG для главных фото.');
         }
         
         setSlideshowPhotos(slideshowList);
@@ -1438,30 +1226,15 @@ function App() {
         });
       }
 
-      // Загружаем все главные фото и маски параллельно
+      // Загружаем все главные фото (PNG файлы) параллельно
+      // PNG файл сам является маской
       const loadPromises = slideshowPhotos.map(async (photo) => {
         const photoUrl = `/photos/${photo.filename}`;
-        const baseName = photo.filename.replace(/\.(jpg|jpeg)$/i, '');
-        const maskFilename = `${baseName}.png`;
-        const maskUrl = `/photos/${maskFilename}`;
         
         // Используем прямые URL - браузер сам закэширует изображения
         newMainPhotoUrls[photo.filename] = photoUrl;
-        
-        // Проверяем существование маски через HEAD запрос
-        try {
-          const response = await fetch(maskUrl, { method: 'HEAD' });
-          if (response.ok) {
-            newMaskUrls[photo.filename] = maskUrl;
-          } else if (debugMode) {
-            console.log('[DEBUG] Маска не найдена:', maskUrl);
-          }
-        } catch (maskError) {
-          // Маска может отсутствовать, это нормально
-          if (debugMode) {
-            console.log('[DEBUG] Маска не загружена:', maskUrl, maskError);
-          }
-        }
+        // PNG файл сам является маской
+        newMaskUrls[photo.filename] = photoUrl;
       });
       
       await Promise.all(loadPromises);
@@ -1469,9 +1242,8 @@ function App() {
       setMaskUrls(newMaskUrls);
       
       if (debugMode) {
-        console.log('[DEBUG] Предзагрузка главных фото и масок завершена:', {
+        console.log('[DEBUG] Предзагрузка главных фото (PNG) завершена:', {
           photosLoaded: Object.keys(newMainPhotoUrls).length,
-          masksLoaded: Object.keys(newMaskUrls).length,
           totalPhotos: slideshowPhotos.length
         });
       }
@@ -1483,6 +1255,11 @@ function App() {
   // Загружаем изображения после получения индекса и предзагружаем все тайлы
   useEffect(() => {
     if (!photoIndex) return;
+    // Ждем, пока slideshowPhotos будет загружен (может быть пустым массивом, но должен быть установлен)
+    // slideshowPhotos устанавливается в том же useEffect, где загружается photoIndex, но асинхронно
+    // Поэтому нужно подождать следующего тика, чтобы slideshowPhotos был установлен
+    // Но на самом деле slideshowPhotos устанавливается синхронно в том же useEffect, так что это не проблема
+    // Однако, если slideshowPhotos еще не установлен (undefined), то нужно подождать
 
     const loadImages = async () => {
       // Сбрасываем флаг загрузки тайлов при новой загрузке
@@ -1506,19 +1283,20 @@ function App() {
       setPhotoColors(colors);
       setPhotoAspects(photoAspects);
       
-      // Предзагружаем все тайлы из /tiles/ (все файлы из index.json)
-      // Главные фото (с PNG масками) НЕ могут быть тайлами - исключаем их из списка доступных
+      // Предзагружаем все тайлы из /photos/ (все файлы из index.json)
+      // Главные фото (PNG файлы) НЕ могут быть тайлами - исключаем их из списка доступных
       setLoadingProgress('Предзагрузка тайлов...');
       
-      // Создаем Set имен файлов главных фото (с масками) для быстрой проверки
+      // Создаем Set имен файлов главных фото (PNG файлы) для быстрой проверки
+      // Используем текущее значение slideshowPhotos из замыкания
       const mainPhotoFilenames = new Set(slideshowPhotos.map(photo => photo.filename));
       
-      // Предзагружаем все тайлы из /tiles/ и проверяем их существование
+      // Предзагружаем все тайлы из /photos/ и проверяем их существование
       // Создаем Set доступных индексов тайлов
       const availableIndices = new Set();
       const missingTiles = [];
       const tilePromises = photos.map(async (photo, index) => {
-        // Пропускаем главные фото (те, у которых есть PNG маски) - они не могут быть тайлами
+        // Пропускаем главные фото (PNG файлы) - они не могут быть тайлами
         if (mainPhotoFilenames.has(photo.filename)) {
           if (debugMode) {
             console.log(`[DEBUG] Пропуск главного фото (не может быть тайлом): index=${index}, filename=${photo.filename}`);
@@ -1526,7 +1304,7 @@ function App() {
           return;
         }
         
-        const tileUrl = `/tiles/${photo.filename}`;
+        const tileUrl = `/photos/${photo.filename}`;
         // Проверяем существование тайла через HEAD запрос
         try {
           const response = await fetch(tileUrl, { method: 'HEAD' });
@@ -1568,7 +1346,9 @@ function App() {
         excludedMainPhotos: excludedMainPhotos,
         missingTiles: photos.length - availableIndices.size - excludedMainPhotos,
         availableIndices: Array.from(availableIndices).sort((a, b) => a - b),
-        missingTilesList: missingTiles.map(t => `${t.index}:${t.filename}`)
+        missingTilesList: missingTiles.map(t => `${t.index}:${t.filename}`),
+        mainPhotoFilenames: Array.from(mainPhotoFilenames),
+        allPhotoFilenames: photos.map(p => p.filename)
       });
       
       setLoadingProgress('Готово!');
@@ -1675,15 +1455,14 @@ function App() {
   const generateMosaic = useCallback(async () => {
     // Не генерируем мозаику, если тайлы еще не загружены и проверены
     if (images.length === 0 || slideshowPhotos.length === 0 || !containerSize.width || !tilesLoaded || availableTileIndices.size === 0) {
-      if (debugMode) {
-        console.log('[DEBUG] generateMosaic пропущен:', {
-          imagesLength: images.length,
-          slideshowPhotosLength: slideshowPhotos.length,
-          containerWidth: containerSize.width,
-          tilesLoaded,
-          availableTilesCount: availableTileIndices.size
-        });
-      }
+      console.log('[DEBUG] generateMosaic пропущен:', {
+        imagesLength: images.length,
+        slideshowPhotosLength: slideshowPhotos.length,
+        containerWidth: containerSize.width,
+        tilesLoaded,
+        availableTilesCount: availableTileIndices.size,
+        slideshowPhotos: slideshowPhotos.map(p => p.filename)
+      });
       return;
     }
     
@@ -1700,7 +1479,7 @@ function App() {
 
     const currentPhoto = slideshowPhotos[currentMainIndex];
     
-    // Загружаем основное фото через кэш (оригинальное, не сжатое)
+    // Загружаем основное фото (PNG) через кэш
     const mainImage = new Image();
     mainImage.crossOrigin = 'anonymous';
     
@@ -1861,7 +1640,12 @@ function App() {
     
     // Проверяем, что есть доступные тайлы
     if (availableTileIndices.size === 0) {
-      console.error('[ERROR] Нет доступных тайлов');
+      console.error('[ERROR] Нет доступных тайлов', {
+        totalPhotos: photos.length,
+        slideshowPhotosCount: slideshowPhotos.length,
+        mainPhotoFilenames: slideshowPhotos.map(p => p.filename),
+        availableTileIndicesSize: availableTileIndices.size
+      });
       return;
     }
     
@@ -1912,39 +1696,36 @@ function App() {
     // Обновляем размер главного фото в состоянии
     setMainImageSize({ width: mainImgWidth, height: mainImgHeight, x: mainImgX, y: mainImgY });
     
-    // Загружаем маску после уменьшения главного фото на `a`
-    // Маска имеет то же имя что и фото, но с расширением PNG
+    // Загружаем маску (PNG файл сам является маской)
     // Масштабируем маску до размера уменьшенного главного фото
-    const baseName = currentPhoto.filename.replace(/\.(jpg|jpeg)$/i, '');
-    const maskFilename = `${baseName}.png`;
     let currentMaskData = null;
     try {
       // Используем уменьшенные размеры главного фото для маски
       const maskSize = { width: mainImgWidth, height: mainImgHeight };
-      // Используем кэшированный URL маски если доступен
-      const maskUrl = `/photos/${maskFilename}`;
+      // Используем кэшированный URL маски если доступен (PNG файл сам является маской)
+      const maskUrl = `/photos/${currentPhoto.filename}`;
       const cachedMaskUrl = maskUrls[currentPhoto.filename] || maskUrl;
-      const mask = await loadMask(maskFilename, canvasWidth, canvasHeight, maskSize, cachedMaskUrl);
+      const mask = await loadMask(currentPhoto.filename, canvasWidth, canvasHeight, maskSize, cachedMaskUrl);
       if (mask && mask.imageData) {
         currentMaskData = mask;
         if (debugMode) {
-          console.log('[DEBUG] Маска загружена:', {
-            filename: maskFilename,
+          console.log('[DEBUG] Маска загружена (PNG файл):', {
+            filename: currentPhoto.filename,
             width: mask.width,
             height: mask.height,
             fromCache: !!maskUrls[currentPhoto.filename]
           });
         }
       } else {
-        // Маска не найдена - это нормально, но не должно быть в слайд-шоу
+        // Маска не найдена - это не должно быть в слайд-шоу
         if (debugMode) {
-          console.log('[DEBUG] Маска не найдена при генерации мозаики:', maskFilename);
+          console.log('[DEBUG] Маска не найдена при генерации мозаики:', currentPhoto.filename);
         }
       }
     } catch (e) {
-      // Маска не найдена - это нормально (не главное фото)
+      // Маска не найдена - это не должно быть в слайд-шоу
       if (debugMode) {
-        console.log('[DEBUG] Ошибка загрузки маски для:', maskFilename);
+        console.log('[DEBUG] Ошибка загрузки маски для:', currentPhoto.filename);
       }
     }
     
@@ -2273,9 +2054,8 @@ function App() {
       setMaskImageUrl(maskUrl);
       
       // Создаем маску для главного изображения из исходного PNG (без расширения)
-      const baseName = currentPhoto.filename.replace(/\.(jpg|jpeg)$/i, '');
-      const maskFilename = `${baseName}.png`;
-      const originalMaskUrl = maskUrls[currentPhoto.filename] || `/photos/${maskFilename}`;
+      // PNG файл сам является маской
+      const originalMaskUrl = maskUrls[currentPhoto.filename] || `/photos/${currentPhoto.filename}`;
       
       // Асинхронно создаем масштабированную маску для главного изображения
       try {
@@ -2348,7 +2128,7 @@ function App() {
           return;
         }
         
-        const tileUrl = `/tiles/${image.filename}`;
+        const tileUrl = `/photos/${image.filename}`;
         
         // Используем прямой URL - браузер сам закэширует изображение
         newUrls[imageIndex] = tileUrl;
@@ -2490,7 +2270,7 @@ function App() {
         
         return new Promise((resolve) => {
           // Используем прямой URL - браузер сам закэширует изображение
-          const tileUrl = `/tiles/${images[tile.imageIndex]?.filename}`;
+          const tileUrl = `/photos/${images[tile.imageIndex]?.filename}`;
           tileImg.src = tileUrl;
           
           tileImg.onload = () => {
@@ -2566,64 +2346,9 @@ function App() {
         highResCtx.restore();
       });
       
-      // Рисуем главное фото поверх мозаики, обрезанное по маске
-      if (maskImageUrl) {
-        const maskImg = new Image();
-        maskImg.crossOrigin = 'anonymous';
-        
-        await new Promise((resolve, reject) => {
-          maskImg.onload = () => {
-            // Создаем временный canvas для инвертированной маски
-            const invertedMaskCanvas = document.createElement('canvas');
-            invertedMaskCanvas.width = canvasWidth;
-            invertedMaskCanvas.height = canvasHeight;
-            const invertedMaskCtx = invertedMaskCanvas.getContext('2d');
-            
-            // Рисуем маску на временном canvas
-            invertedMaskCtx.drawImage(maskImg, 0, 0, canvasWidth, canvasHeight);
-            
-            // Инвертируем альфа-канал маски
-            const maskImageData = invertedMaskCtx.getImageData(0, 0, canvasWidth, canvasHeight);
-            const data = maskImageData.data;
-            for (let i = 3; i < data.length; i += 4) {
-              // Инвертируем alpha: 0 -> 255, 255 -> 0
-              data[i] = 255 - data[i];
-            }
-            invertedMaskCtx.putImageData(maskImageData, 0, 0);
-            
-            // Создаем временный canvas для главного фото с маской
-            const mainPhotoCanvas = document.createElement('canvas');
-            mainPhotoCanvas.width = canvasWidth;
-            mainPhotoCanvas.height = canvasHeight;
-            const mainPhotoCtx = mainPhotoCanvas.getContext('2d');
-            
-            // Рисуем главное фото на временном canvas
-            mainPhotoCtx.drawImage(mainImg, mainImgX, mainImgY, mainImgWidth, mainImgHeight);
-            
-            // Применяем инвертированную маску к главному фото используя destination-in
-            // Маска определяет видимость пикселей главного фото
-            mainPhotoCtx.save();
-            mainPhotoCtx.globalCompositeOperation = 'destination-in';
-            mainPhotoCtx.drawImage(invertedMaskCanvas, 0, 0);
-            mainPhotoCtx.restore();
-            
-            // Рисуем обрезанное главное фото поверх мозаики
-            highResCtx.drawImage(mainPhotoCanvas, 0, 0);
-            
-            resolve();
-          };
-          maskImg.onerror = () => {
-            // Если маска не загрузилась, рисуем главное фото без маски
-            console.warn('Не удалось загрузить маску для сохранения, рисуем главное фото без маски');
-            highResCtx.drawImage(mainImg, mainImgX, mainImgY, mainImgWidth, mainImgHeight);
-            resolve();
-          };
-          maskImg.src = maskImageUrl;
-        });
-      } else {
-        // Если маски нет, просто рисуем главное фото поверх мозаики
-        highResCtx.drawImage(mainImg, mainImgX, mainImgY, mainImgWidth, mainImgHeight);
-      }
+      // Рисуем главное фото (PNG) поверх мозаики
+      // PNG уже готов как есть, просто рисуем его поверх тайлов
+      highResCtx.drawImage(mainImg, mainImgX, mainImgY, mainImgWidth, mainImgHeight);
       
       // Вспомогательная функция для скачивания blob
       const downloadBlob = (blob, filename) => {
@@ -2788,17 +2513,7 @@ function App() {
               height: mainImageSize.height,
               objectFit: 'contain',
               zIndex: 2,
-              // Применяем маску к главному изображению (показываем только прозрачные области исходной маски)
-              ...(mainImageMaskUrl ? {
-                maskImage: `url(${mainImageMaskUrl})`,
-                maskSize: '100% 100%',
-                maskPosition: '0 0',
-                maskRepeat: 'no-repeat',
-                WebkitMaskImage: `url(${mainImageMaskUrl})`,
-                WebkitMaskSize: '100% 100%',
-                WebkitMaskPosition: '0 0',
-                WebkitMaskRepeat: 'no-repeat',
-              } : {})
+              // PNG уже готов как есть, маска не нужна
             }}
           />
         )}

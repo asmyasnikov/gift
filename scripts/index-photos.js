@@ -6,19 +6,13 @@ const PHOTOS_DIR = path.join(process.cwd(), 'photos');
 const INDEX_FILE = path.join(PHOTOS_DIR, 'index.json');
 
 // Поддерживаемые форматы изображений
-const IMAGE_EXTENSIONS = ['.jpg', '.jpeg'];
+const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png'];
 
 // Исключаемые файлы
-const EXCLUDED_FILES = ['index.json', 'reference.jpg'];
+const EXCLUDED_FILES = ['index.json'];
 
 // Паттерны для исключения из слайд-шоу
 const EXCLUDE_PATTERNS = [
-  /паспорт/i,
-  /passport/i,
-  /скан/i,
-  /scan/i,
-  /document/i,
-  /трудовая/i,
 ];
 
 async function getImageMetadata(filePath) {
@@ -82,9 +76,8 @@ async function indexPhotos() {
   
   const imageFiles = files.filter(file => {
     const ext = path.extname(file).toLowerCase();
-    // Исключаем PNG файлы (они маски, не основные фото)
+    // Включаем все поддерживаемые форматы, включая PNG (PNG файлы - это главные фото)
     return IMAGE_EXTENSIONS.includes(ext) && 
-           ext !== '.png' &&
            !EXCLUDED_FILES.includes(file);
   });
   
@@ -129,7 +122,11 @@ async function indexPhotos() {
   
   console.log(`\n✅ Индекс сохранён в ${INDEX_FILE}`);
   console.log(`📊 Всего фото: ${index.photos.length}`);
-  console.log(`\n💡 Главные фото определяются автоматически при загрузке страницы по наличию PNG файла с тем же именем`);
+  console.log(`📊 Главных фото (PNG): ${index.photos.filter(p => p.filename.toLowerCase().endsWith('.png')).length}`);
+  console.log(`📊 Тайлов (JPG/JPEG): ${index.photos.filter(p => {
+    const ext = p.filename.toLowerCase();
+    return ext.endsWith('.jpg') || ext.endsWith('.jpeg');
+  }).length}`);
 }
 
 indexPhotos().catch(console.error);
