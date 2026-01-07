@@ -10,38 +10,7 @@ function copyFolderPlugin() {
     closeBundle() {
       const distPath = join(process.cwd(), 'dist')
       
-      // Копируем папку tiles полностью (все файлы нужны для мозаики)
-      const tilesSrcPath = join(process.cwd(), 'tiles')
-      const tilesDestPath = join(distPath, 'tiles')
-      
-      if (existsSync(tilesSrcPath)) {
-        if (!existsSync(tilesDestPath)) {
-          mkdirSync(tilesDestPath, { recursive: true })
-        }
-        
-        function copyRecursive(src, dest) {
-          const entries = readdirSync(src, { withFileTypes: true })
-          
-          for (const entry of entries) {
-            const srcPath = join(src, entry.name)
-            const destPath = join(dest, entry.name)
-            
-            if (entry.isDirectory()) {
-              if (!existsSync(destPath)) {
-                mkdirSync(destPath, { recursive: true })
-              }
-              copyRecursive(srcPath, destPath)
-            } else {
-              copyFileSync(srcPath, destPath)
-            }
-          }
-        }
-        
-        copyRecursive(tilesSrcPath, tilesDestPath)
-        console.log(`✓ Скопирована папка tiles в dist`)
-      }
-      
-      // Копируем только главные фото из папки photos (JPG с соответствующими PNG масками)
+      // Копируем все JPEG и PNG файлы из папки photos
       const photosSrcPath = join(process.cwd(), 'photos')
       const photosDestPath = join(distPath, 'photos')
       
@@ -72,32 +41,29 @@ function copyFolderPlugin() {
             continue
           }
           
-          // Проверяем JPG/JPEG файлы - копируем только если есть соответствующая PNG маска
+          // Копируем все JPEG файлы (jpg, jpeg)
           if (lowerFilename.endsWith('.jpg') || lowerFilename.endsWith('.jpeg')) {
-            const baseName = filename.replace(/\.(jpg|jpeg)$/i, '')
-            const maskFilename = `${baseName}.png`
-            const maskPath = join(photosSrcPath, maskFilename)
-            
-            if (existsSync(maskPath)) {
-              // Копируем JPG файл
-              const jpgSrcPath = join(photosSrcPath, filename)
-              const jpgDestPath = join(photosDestPath, filename)
-              copyFileSync(jpgSrcPath, jpgDestPath)
-              copiedCount++
-              
-              // Копируем PNG маску
-              const pngDestPath = join(photosDestPath, maskFilename)
-              copyFileSync(maskPath, pngDestPath)
-              copiedCount++
-            } else {
-              skippedCount++
-            }
+            const srcPath = join(photosSrcPath, filename)
+            const destPath = join(photosDestPath, filename)
+            copyFileSync(srcPath, destPath)
+            copiedCount++
+            continue
           }
-          // PNG файлы копируем только если они являются масками (уже скопированы выше)
+          
+          // Копируем все PNG файлы
+          if (lowerFilename.endsWith('.png')) {
+            const srcPath = join(photosSrcPath, filename)
+            const destPath = join(photosDestPath, filename)
+            copyFileSync(srcPath, destPath)
+            copiedCount++
+            continue
+          }
+          
           // Остальные файлы пропускаем
+          skippedCount++
         }
         
-        console.log(`✓ Скопирована папка photos в dist (${copiedCount} файлов, пропущено ${skippedCount} файлов без масок)`)
+        console.log(`✓ Скопирована папка photos в dist (${copiedCount} файлов, пропущено ${skippedCount} файлов)`)
       } else {
         console.warn(`Папка photos не найдена, пропускаем`)
       }

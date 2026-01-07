@@ -8,7 +8,6 @@
     "build": "vite build",
     "preview": "vite preview",
     "index-photos": "node scripts/index-photos.js",
-    "compress-photos": "node scripts/compress-photos.js",
     "deploy": "npm run build && vercel --prod"
   },
   "dependencies": {
