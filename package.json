@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "index-photos": "node scripts/index-photos.js",
-    "deploy": "npm run build && vercel --prod"
+    "deploy": "npm run build && vercel --prod",
+    "lint": "eslint src --ext .js,.jsx",
+    "lint:fix": "eslint src --ext .js,.jsx --fix"
   },
   "dependencies": {
     "html2canvas": "^1.4.1",
@@ -17,6 +19,9 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
+    "eslint": "^8.57.1",
+    "eslint-plugin-react": "^7.34.1",
+    "eslint-plugin-react-hooks": "^4.6.0",
     "sharp": "^0.33.2",
     "vite": "^5.0.8"
   }

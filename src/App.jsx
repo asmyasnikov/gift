@@ -2,19 +2,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { config } from '@/config.js';
 
 // Порог вариации цвета для дробления области
-const VARIANCE_THRESHOLD = 800;
 // Максимальный размер канваса для анализа (по большей стороне)
 const MAX_CANVAS_SIZE = 512;
 
 // Константы для opacity тайлов
-const MIN_OPACITY = 0.1; // Минимальная прозрачность (тайлы не видны над непрозрачными частями PNG маски)
 const MAX_OPACITY = 1.0;  // Максимальная прозрачность (тайлы видны над прозрачными частями PNG маски)
 
-// Константа для градиента opacity за пределами маски
-// Определяет количество тайлов от границы прозрачной области маски, на котором происходит переход от MIN_OPACITY к MAX_OPACITY
-// Значение = количество тайлов (1, 2, 3, ...)
-// Больше значение = более плавный/длинный переход (больше тайлов в переходе), меньше = более резкий/короткий переход
-const OPACITY_TRANSITION_TILES = 1; // Количество тайлов для перехода от min к max opacity
 
 // Константа для увеличения тайла при наведении/клике
 const TILE_HOVER_SCALE = 5; // Масштаб увеличения тайла (1.0 = без увеличения, 2.0 = в 2 раза, и т.д.)
@@ -125,8 +118,8 @@ function maskDataToDataUrl(maskData, containerSize, mainImageSize, tileSize = 0)
       const maskWidth = Math.floor(mainImageSize.width);
       const maskHeight = Math.floor(mainImageSize.height);
       
-      // Получаем imageData области маски с целыми размерами
-      const maskImageData = ctx.getImageData(
+      // Получаем imageData области маски с целыми размерами (для возможного расширения в будущем)
+      ctx.getImageData(
         Math.floor(mainImageSize.x),
         Math.floor(mainImageSize.y),
         maskWidth,
@@ -159,90 +152,8 @@ function maskDataToDataUrl(maskData, containerSize, mainImageSize, tileSize = 0)
 }
 
 
-// Проверяет, является ли пиксель прозрачным в маске
-function isTransparentInMask(x, y, maskData) {
-  if (!maskData || !maskData.imageData) {
-    return false;
-  }
-  
-  const imgData = maskData.imageData;
-  const px = Math.floor(x);
-  const py = Math.floor(y);
-  
-  if (px < 0 || px >= imgData.width || py < 0 || py >= imgData.height) {
-    return false;
-  }
-  
-  const idx = (py * imgData.width + px) * 4;
-  const alpha = imgData.data[idx + 3];
-  
-  // ИНВЕРТИРОВАННАЯ ЛОГИКА: прозрачные области (альфа <= 128) = min opacity
-  return alpha <= 128;
-}
 
-// Вычисляет расстояние до ближайшей прозрачной точки маски
-function distanceToTransparentMask(x, y, maskData, maxSearchDistance = 200) {
-  if (!maskData || !maskData.imageData) return Infinity;
-  
-  // Проверяем саму точку
-  if (isTransparentInMask(x, y, maskData)) {
-    return 0;
-  }
-  
-  // Ищем ближайшую прозрачную точку в радиусе
-  let minDistance = Infinity;
-  const imgData = maskData.imageData;
-  const searchRadius = Math.min(maxSearchDistance, Math.max(imgData.width, imgData.height) * 0.3);
-  
-  // Используем более точный поиск с шагом 1 для точного определения границы
-  for (let dy = -searchRadius; dy <= searchRadius; dy += 1) {
-    for (let dx = -searchRadius; dx <= searchRadius; dx += 1) {
-      const checkX = x + dx;
-      const checkY = y + dy;
-      
-      if (isTransparentInMask(checkX, checkY, maskData)) {
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        if (distance < minDistance) {
-          minDistance = distance;
-          // Если нашли очень близкую точку, можно прервать поиск для оптимизации
-          if (distance < 2) {
-            return minDistance;
-          }
-        }
-      }
-    }
-  }
-  
-  return minDistance;
-}
 
-// Quadtree узел для адаптивного разбиения
-class QuadNode {
-  constructor(x, y, size, depth = 0) {
-    this.x = x;
-    this.y = y;
-    this.size = size;
-    this.depth = depth;
-    this.children = null;
-    this.avgColor = null;
-    this.imageIndex = null;
-  }
-
-  subdivide() {
-    const halfSize = this.size / 2;
-    this.children = [
-      new QuadNode(this.x, this.y, halfSize, this.depth + 1),
-      new QuadNode(this.x + halfSize, this.y, halfSize, this.depth + 1),
-      new QuadNode(this.x, this.y + halfSize, halfSize, this.depth + 1),
-      new QuadNode(this.x + halfSize, this.y + halfSize, halfSize, this.depth + 1),
-    ];
-    return this.children;
-  }
-
-  isLeaf() {
-    return this.children === null;
-  }
-}
 
 // Функции для работы с шестиугольниками (пчелиными сотами)
 
@@ -317,6 +228,7 @@ function generateHexagonGrid(width, height, side) {
   // Генерируем центры по правилу: рисовать соту, если верхняя точка попадает в область
   // Верхняя точка шестиугольника находится на расстоянии side (circumscribedRadius) от центра вверх
   // То есть если центр в (x, y), то верхняя точка в (x, y - side)
+  // eslint-disable-next-line no-constant-condition
   while (true) {
     // Вычисляем верхнюю точку следующего ряда
     const nextY = y + verticalSpacing;
@@ -415,40 +327,6 @@ function getHexagonAreaColor(imageData, centerX, centerY, side, canvasWidth) {
   return { r: avgR, g: avgG, b: avgB };
 }
 
-// Вычисляет вариацию цвета в области (насколько неоднородна область)
-function calculateVariance(imageData, x, y, size, canvasWidth) {
-  let sumR = 0, sumG = 0, sumB = 0;
-  let sumR2 = 0, sumG2 = 0, sumB2 = 0;
-  let count = 0;
-
-  const endX = Math.min(x + size, canvasWidth);
-  const endY = Math.min(y + size, imageData.height);
-
-  for (let py = y; py < endY; py++) {
-    for (let px = x; px < endX; px++) {
-      const idx = (py * canvasWidth + px) * 4;
-      const r = imageData.data[idx];
-      const g = imageData.data[idx + 1];
-      const b = imageData.data[idx + 2];
-
-      sumR += r; sumG += g; sumB += b;
-      sumR2 += r * r; sumG2 += g * g; sumB2 += b * b;
-      count++;
-    }
-  }
-
-  if (count === 0) return 0;
-
-  const meanR = sumR / count;
-  const meanG = sumG / count;
-  const meanB = sumB / count;
-
-  const varR = (sumR2 / count) - (meanR * meanR);
-  const varG = (sumG2 / count) - (meanG * meanG);
-  const varB = (sumB2 / count) - (meanB * meanB);
-
-  return varR + varG + varB;
-}
 
 // Вычисляет средний цвет области
 function getAreaColor(imageData, x, y, size, canvasWidth) {
@@ -494,100 +372,6 @@ function getAreaColor(imageData, x, y, size, canvasWidth) {
   return { r: avgR, g: avgG, b: avgB };
 }
 
-// Строит Quadtree для изображения
-function buildQuadtree(imageData, canvasWidth, canvasHeight, minTileSize = null, maxTileSize = null) {
-  // Если не указаны размеры, используем разумные значения по умолчанию
-  let defaultMinTileSize = minTileSize || Math.min(canvasWidth, canvasHeight) / 30;
-  let defaultMaxTileSize = maxTileSize || Math.min(canvasWidth, canvasHeight) / 10;
-  
-  // Убеждаемся, что размеры валидны
-  const absoluteMinSize = 2; // Абсолютный минимум размера узла
-  const absoluteMaxSize = Math.max(canvasWidth, canvasHeight);
-  
-  defaultMinTileSize = Math.max(defaultMinTileSize, absoluteMinSize);
-  defaultMaxTileSize = Math.min(defaultMaxTileSize, absoluteMaxSize);
-  
-  // Убеждаемся, что min < max
-  if (defaultMinTileSize >= defaultMaxTileSize) {
-    defaultMaxTileSize = defaultMinTileSize * 2;
-  }
-  
-  // Используем размер, который гарантированно покрывает весь canvas
-  // Округляем до ближайшей степени двойки для правильного деления
-  const rootSize = Math.pow(2, Math.ceil(Math.log2(Math.max(canvasWidth, canvasHeight))));
-  const root = new QuadNode(0, 0, rootSize);
-  const queue = [root];
-  
-  // Ограничение глубины для предотвращения бесконечных циклов
-  const maxDepth = 20;
-  let iterations = 0;
-  const maxIterations = 10000; // Максимальное количество итераций
-
-  while (queue.length > 0 && iterations < maxIterations) {
-    iterations++;
-    const node = queue.shift();
-
-    // Проверяем выходит ли узел за границы
-    if (node.x >= canvasWidth || node.y >= canvasHeight) {
-      continue;
-    }
-
-    // Ограничиваем размер узла границами изображения
-    const actualSize = Math.min(
-      node.size,
-      canvasWidth - node.x,
-      canvasHeight - node.y
-    );
-
-    if (actualSize <= 0) continue;
-    
-    // Проверяем глубину - не дробим слишком глубоко
-    if (node.depth >= maxDepth) {
-      // Достигли максимальной глубины - делаем листовым узлом
-      node.avgColor = getAreaColor(imageData, node.x, node.y, actualSize, canvasWidth);
-      node.size = actualSize;
-      continue;
-    }
-
-    // Проверяем нужно ли дробить
-    if (actualSize > defaultMinTileSize) {
-      const variance = calculateVariance(imageData, node.x, node.y, actualSize, canvasWidth);
-      
-      // Дробим если:
-      // 1. Высокая вариация и размер больше минимума
-      // 2. Размер больше максимума (слишком большой тайл)
-      const shouldSplit = 
-        (variance > VARIANCE_THRESHOLD && actualSize > defaultMinTileSize) ||
-        (actualSize > defaultMaxTileSize);
-
-      if (shouldSplit) {
-        const children = node.subdivide();
-        queue.push(...children);
-        continue;
-      }
-    }
-
-    // Это листовой узел - вычисляем средний цвет
-    node.avgColor = getAreaColor(imageData, node.x, node.y, actualSize, canvasWidth);
-    node.size = actualSize; // Сохраняем реальный размер
-  }
-  
-  if (iterations >= maxIterations) {
-    console.warn('[WARNING] buildQuadtree достиг максимального количества итераций');
-  }
-
-  return root;
-}
-
-// Собирает все листовые узлы
-function collectLeaves(node, leaves = []) {
-  if (node.isLeaf()) {
-    leaves.push(node);
-  } else {
-    node.children.forEach(child => collectLeaves(child, leaves));
-  }
-  return leaves;
-}
 
 // Евклидово расстояние между цветами
 function colorDistance(c1, c2) {
@@ -605,241 +389,9 @@ function colorDistance(c1, c2) {
   );
 }
 
-// Структура для представления области размещения тайла
-class TilePlacement {
-  constructor(x, y, width, height, avgColor, variance, priority = 0) {
-    this.x = x;
-    this.y = y;
-    this.width = width;
-    this.height = height;
-    this.avgColor = avgColor;
-    this.variance = variance;
-    this.priority = priority; // Приоритет размещения (выше = размещается раньше)
-    this.placed = false;
-  }
-  
-  getCenterX() {
-    return this.x + this.width / 2;
-  }
-  
-  getCenterY() {
-    return this.y + this.height / 2;
-  }
-  
-  getArea() {
-    return this.width * this.height;
-  }
-  
-  // Вычисляет расстояние от центра до заданной точки
-  distanceToCenter(centerX, centerY) {
-    const cx = this.getCenterX();
-    const cy = this.getCenterY();
-    return Math.sqrt(Math.pow(cx - centerX, 2) + Math.pow(cy - centerY, 2));
-  }
-}
 
-// Проверяет, пересекаются ли два прямоугольника
-function rectanglesIntersect(rect1, rect2) {
-  return !(rect1.x + rect1.width <= rect2.x ||
-           rect2.x + rect2.width <= rect1.x ||
-           rect1.y + rect1.height <= rect2.y ||
-           rect2.y + rect2.height <= rect1.y);
-}
 
-// Проверяет, пересекается ли прямоугольник с любым из размещенных тайлов
-function hasCollision(tileRect, placedTiles, minGap = 0) {
-  const expandedRect = {
-    x: tileRect.x - minGap,
-    y: tileRect.y - minGap,
-    width: tileRect.width + minGap * 2,
-    height: tileRect.height + minGap * 2
-  };
-  
-  for (const placedTile of placedTiles) {
-    const placedRect = {
-      x: placedTile.x,
-      y: placedTile.y,
-      width: placedTile.width,
-      height: placedTile.height
-    };
-    
-    if (rectanglesIntersect(expandedRect, placedRect)) {
-      return true;
-    }
-  }
-  
-  return false;
-}
 
-// Находит оптимальную позицию для тайла с учетом столкновений
-// Использует спиральный поиск от целевой позиции
-function findOptimalPosition(targetX, targetY, tileWidth, tileHeight, placedTiles, bounds, maxAttempts = 50) {
-  const minGap = 1; // Минимальный зазор между тайлами в пикселях
-  
-  // Проверяем целевую позицию
-  const targetRect = {
-    x: targetX,
-    y: targetY,
-    width: tileWidth,
-    height: tileHeight
-  };
-  
-  // Убеждаемся, что тайл в пределах границ
-  if (targetRect.x >= bounds.minX && 
-      targetRect.y >= bounds.minY &&
-      targetRect.x + targetRect.width <= bounds.maxX &&
-      targetRect.y + targetRect.height <= bounds.maxY) {
-    if (!hasCollision(targetRect, placedTiles, minGap)) {
-      return { x: targetX, y: targetY, found: true };
-    }
-  }
-  
-  // Спиральный поиск от целевой позиции
-  const stepSize = Math.max(tileWidth, tileHeight) * 0.1;
-  let radius = stepSize;
-  let angle = 0;
-  const angleStep = Math.PI / 8; // 8 попыток на круг
-  
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const offsetX = Math.cos(angle) * radius;
-    const offsetY = Math.sin(angle) * radius;
-    
-    const testX = targetX + offsetX;
-    const testY = targetY + offsetY;
-    
-    const testRect = {
-      x: testX,
-      y: testY,
-      width: tileWidth,
-      height: tileHeight
-    };
-    
-    // Проверяем границы
-    if (testRect.x >= bounds.minX && 
-        testRect.y >= bounds.minY &&
-        testRect.x + testRect.width <= bounds.maxX &&
-        testRect.y + testRect.height <= bounds.maxY) {
-      // Проверяем столкновения
-      if (!hasCollision(testRect, placedTiles, minGap)) {
-        return { x: testX, y: testY, found: true };
-      }
-    }
-    
-    angle += angleStep;
-    if (angle >= Math.PI * 2) {
-      angle = 0;
-      radius += stepSize;
-    }
-  }
-  
-  // Если не нашли позицию, возвращаем целевую (будет наложение, но лучше чем ничего)
-  return { x: targetX, y: targetY, found: false };
-}
-
-// Оптимизирует размер тайла, чтобы он лучше заполнял доступное пространство
-function optimizeTileSize(targetSize, areaWidth, areaHeight, photoAspect, minTileSize, maxTileSize) {
-  let tileWidth, tileHeight;
-  
-  // Вычисляем размеры с точными пропорциями фото
-  if (photoAspect > areaWidth / areaHeight) {
-    // Фото шире области - подгоняем по ширине
-    tileWidth = Math.min(targetSize, areaWidth);
-    tileHeight = tileWidth / photoAspect;
-    
-    // Если высота превышает доступное пространство, подгоняем по высоте
-    if (tileHeight > areaHeight) {
-      tileHeight = areaHeight;
-      tileWidth = tileHeight * photoAspect;
-    }
-  } else {
-    // Фото уже области - подгоняем по высоте
-    tileHeight = Math.min(targetSize, areaHeight);
-    tileWidth = tileHeight * photoAspect;
-    
-    // Если ширина превышает доступное пространство, подгоняем по ширине
-    if (tileWidth > areaWidth) {
-      tileWidth = areaWidth;
-      tileHeight = tileWidth / photoAspect;
-    }
-  }
-  
-  // Ограничиваем минимальным и максимальным размером
-  const currentSize = Math.sqrt(tileWidth * tileHeight);
-  if (currentSize < minTileSize) {
-    const scale = minTileSize / currentSize;
-    tileWidth *= scale;
-    tileHeight *= scale;
-  } else if (currentSize > maxTileSize) {
-    const scale = maxTileSize / currentSize;
-    tileWidth *= scale;
-    tileHeight *= scale;
-  }
-  
-  return { width: tileWidth, height: tileHeight };
-}
-
-// Создает области для размещения тайлов на основе анализа изображения
-function createPlacementAreas(imageAreaData, imageAreaWidth, imageAreaHeight, mainImgX, mainImgY, mainImgWidth, mainImgHeight, scaleX, scaleY, quadtreeRoot = null) {
-  const areas = [];
-  
-  // Используем переданный Quadtree или строим новый
-  const root = quadtreeRoot || buildQuadtree(imageAreaData, imageAreaWidth, imageAreaHeight);
-  const leaves = collectLeaves(root).filter(node => {
-    if (!node.avgColor) return false;
-    const c = node.avgColor;
-    if (!isFinite(c.r) || !isFinite(c.g) || !isFinite(c.b) ||
-        isNaN(c.r) || isNaN(c.g) || isNaN(c.b)) {
-      return false;
-    }
-    if (node.x < 0 || node.y < 0 || 
-        node.x >= imageAreaWidth || node.y >= imageAreaHeight) {
-      return false;
-    }
-    return true;
-  });
-  
-  // Преобразуем узлы Quadtree в области размещения
-  leaves.forEach(node => {
-    // Масштабируем координаты и размеры от области изображения к размеру главного фото в контейнере
-    const x = mainImgX + node.x * scaleX;
-    const y = mainImgY + node.y * scaleY;
-    const width = node.size * scaleX;
-    const height = node.size * scaleY;
-    
-    // Вычисляем вариацию для определения размера тайла
-    const variance = calculateVariance(imageAreaData, node.x, node.y, node.size, imageAreaWidth);
-    
-    // Определяем приоритет: сначала центр, затем по близости к центру
-    const nodeCenterX = node.x + node.size / 2;
-    const nodeCenterY = node.y + node.size / 2;
-    const imageAreaCenterX = imageAreaWidth / 2;
-    const imageAreaCenterY = imageAreaHeight / 2;
-    const distanceFromCenter = Math.sqrt(
-      Math.pow(nodeCenterX - imageAreaCenterX, 2) + 
-      Math.pow(nodeCenterY - imageAreaCenterY, 2)
-    );
-    const maxDistance = Math.sqrt(imageAreaWidth * imageAreaWidth + imageAreaHeight * imageAreaHeight) / 2;
-    const normalizedDistance = distanceFromCenter / maxDistance;
-    
-    // Приоритет: выше для центральных областей и однородных (низкая вариация)
-    // Центральные области размещаются первыми, затем по удалению от центра
-    // Однородные области (низкая вариация) получают больший приоритет
-    const varianceFactor = variance < VARIANCE_THRESHOLD ? 1.0 : 0.5; // Однородные области важнее
-    const priority = (1.0 - normalizedDistance) * varianceFactor;
-    
-    areas.push(new TilePlacement(
-      x, y, width, height,
-      node.avgColor,
-      variance,
-      priority
-    ));
-  });
-  
-  // Сортируем по приоритету (высокий приоритет = размещается раньше)
-  areas.sort((a, b) => b.priority - a.priority);
-  
-  return areas;
-}
 
 // Находит наиболее подходящее фото по цвету с учетом разнообразия и ограничений использования
 function findBestMatch(targetColor, photoColors, usageCount, excludedIndices = new Set(), diversityBonus = 5000, debugInfo = null, availableTileIndices = null, maxUsage = MAX_TILE_USAGE) {
@@ -975,81 +527,6 @@ function findBestMatch(targetColor, photoColors, usageCount, excludedIndices = n
   return selected;
 }
 
-// Вычисляет opacity тайла на основе маски
-// Проверяет alpha по всей области тайла (шестиугольника)
-// Прозрачные части маски (alpha < 0.5) = тайлы видны (MAX_OPACITY)
-// Непрозрачные части маски (alpha >= 0.5) = тайлы не видны (MIN_OPACITY)
-function calculateTileOpacity(tileCenterX, tileCenterY, containerWidth, containerHeight, maskData = null, averageTileSize = 50, hexSide = null) {
-  // Если нет маски - все тайлы с максимальной opacity
-  if (!maskData || !maskData.imageData) {
-    return MAX_OPACITY;
-  }
-  
-  const imgData = maskData.imageData;
-  
-  // Если hexSide не передан, используем упрощенную проверку только центра
-  if (!hexSide) {
-    const px = Math.floor(tileCenterX);
-    const py = Math.floor(tileCenterY);
-    
-    // Проверяем границы
-    if (px < 0 || px >= imgData.width || py < 0 || py >= imgData.height) {
-      return MAX_OPACITY;
-    }
-    
-    // Получаем alpha значение в точке центра тайла
-    const idx = (py * imgData.width + px) * 4;
-    const alpha = imgData.data[idx + 3];
-    const alphaNormalized = alpha / 255;
-    
-    // Прозрачные части (alpha < 0.5) = тайлы видны (MAX_OPACITY)
-    // Непрозрачные части (alpha >= 0.5) = тайлы не видны (MIN_OPACITY)
-    return alphaNormalized < 0.5 ? MAX_OPACITY : MIN_OPACITY;
-  }
-  
-  // Получаем вершины шестиугольника для определения bounding box
-  const vertices = getHexagonVertices(tileCenterX, tileCenterY, hexSide);
-  const minX = Math.min(...vertices.map(v => v.x));
-  const maxX = Math.max(...vertices.map(v => v.x));
-  const minY = Math.min(...vertices.map(v => v.y));
-  const maxY = Math.max(...vertices.map(v => v.y));
-  
-  // Проверяем все точки в области тайла с шагом для оптимизации
-  // Используем шаг 2-3 пикселя для баланса между точностью и производительностью
-  const step = Math.max(1, Math.floor(hexSide / 20)); // Адаптивный шаг в зависимости от размера тайла
-  
-  for (let y = Math.floor(minY); y <= Math.ceil(maxY); y += step) {
-    for (let x = Math.floor(minX); x <= Math.ceil(maxX); x += step) {
-      // Проверяем, находится ли точка внутри шестиугольника
-      if (!isPointInHexagon(x, y, tileCenterX, tileCenterY, hexSide)) {
-        continue;
-      }
-      
-      // Проверяем границы маски
-      const px = Math.floor(x);
-      const py = Math.floor(y);
-      
-      if (px < 0 || px >= imgData.width || py < 0 || py >= imgData.height) {
-        continue;
-      }
-      
-      // Получаем alpha значение в этой точке
-      const idx = (py * imgData.width + px) * 4;
-      const alpha = imgData.data[idx + 3];
-      const alphaNormalized = alpha / 255;
-      
-      // Если хотя бы в одной точке alpha >= 0.5 (непрозрачно), возвращаем MIN_OPACITY
-      // Тайл не должен быть виден над непрозрачной частью маски
-      if (alphaNormalized >= 0.5) {
-        return MIN_OPACITY;
-      }
-    }
-  }
-  
-  // Если все проверенные точки имеют alpha < 0.5 (прозрачно), возвращаем MAX_OPACITY
-  // Тайл должен быть виден над прозрачной частью маски
-  return MAX_OPACITY;
-}
 
 function App() {
   const [loading, setLoading] = useState(true);
@@ -1057,18 +534,13 @@ function App() {
   const [photoIndex, setPhotoIndex] = useState(null);
   const [images, setImages] = useState([]);
   const [photoColors, setPhotoColors] = useState([]);
-  const [photoAspects, setPhotoAspects] = useState([]);
   const [slideshowPhotos, setSlideshowPhotos] = useState([]);
   const [currentMainIndex, setCurrentMainIndex] = useState(0);
   const [tiles, setTiles] = useState([]);
-  const [transitioning, setTransitioning] = useState(false);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [mainImageSize, setMainImageSize] = useState({ width: 0, height: 0, x: 0, y: 0 });
-  const [imageAspectRatio, setImageAspectRatio] = useState(1);
   const [mainImageUrl, setMainImageUrl] = useState(null);
-  const [edgeColors, setEdgeColors] = useState([]);
   const [autoPlay, setAutoPlay] = useState(false);
-  const [maskData, setMaskData] = useState(null);
   const [maskImageUrl, setMaskImageUrl] = useState(null); // Data URL маски для CSS mask-image
   const [debugMode, setDebugMode] = useState(false);
   const [isGeneratingHighRes, setIsGeneratingHighRes] = useState(false);
@@ -1230,20 +702,16 @@ function App() {
 
       const loadedImages = [];
       const colors = [];
-      const photoAspects = [];
       const photos = photoIndex.photos;
 
       // Используем пропорции из index.json (быстрее, чем загружать все изображения)
       photos.forEach(photo => {
-        const aspect = photo.width / photo.height;
-        photoAspects.push(aspect);
         colors.push(photo.avgColor);
         loadedImages.push({ filename: photo.filename });
       });
 
       setImages(loadedImages);
       setPhotoColors(colors);
-      setPhotoAspects(photoAspects);
       
       // Предзагружаем все тайлы из /photos/ (все файлы из index.json)
       // Главные фото (PNG файлы) НЕ могут быть тайлами - исключаем их из списка доступных
@@ -1465,7 +933,6 @@ function App() {
 
     // Вычисляем пропорции изображения
     const imgAspect = mainImage.naturalWidth / mainImage.naturalHeight;
-    setImageAspectRatio(imgAspect);
     
     // Устанавливаем URL основного фото для фона (используем кэшированный URL)
     const photoUrl = `/photos/${currentPhoto.filename}`;
@@ -1536,7 +1003,6 @@ function App() {
     
     // Получаем цвета краев главного фото для заполнения оставшегося пространства
     const edgeColorSamples = [];
-    const sampleSize = 20; // Размер области для выборки
     const samplePositions = [
       // Верхний край
       { x: drawX + drawWidth * 0.1, y: drawY, size: drawWidth * 0.8 },
@@ -1560,15 +1026,11 @@ function App() {
       const color = getAreaColor(imageData, pos.x, pos.y, pos.size, canvasWidth);
       edgeColorSamples.push(color);
     });
-    
-    setEdgeColors(edgeColorSamples);
 
     // Строим Quadtree только для области, где нарисовано изображение
     // Это важно, чтобы тайлы покрывали всю область основного изображения
     const imageAreaWidth = drawWidth;
     const imageAreaHeight = drawHeight;
-    const imageAreaX = drawX;
-    const imageAreaY = drawY;
     
     // Создаем новый canvas только для области изображения
     const imageAreaCanvas = document.createElement('canvas');
@@ -1738,8 +1200,6 @@ function App() {
     // Используем Map для подсчета использований каждого фото
     const usageCount = new Map();
     
-    // Вычисляем средний размер тайла для градиента opacity
-    const averageTileSize = d_описанная;
     
     // Генерируем плитки для всего контейнера в виде шестиугольной сетки
     const allTiles = [];
@@ -2004,9 +1464,6 @@ function App() {
       }
     }
     
-    // Обновляем маску в состоянии только один раз после генерации
-    setMaskData(currentMaskData);
-    
     // Конвертируем maskData в data URL для CSS mask-image
     // Расширяем маску на весь контейнер
     if (currentMaskData && mainImgWidth > 0 && mainImgHeight > 0) {
@@ -2020,7 +1477,7 @@ function App() {
     }
     
     setTiles(newTiles);
-  }, [images, photoColors, photoAspects, slideshowPhotos, currentMainIndex, containerSize, debugMode, mainPhotoUrls, maskUrls, availableTileIndices, tilesLoaded]);
+  }, [images, photoColors, slideshowPhotos, currentMainIndex, containerSize, debugMode, mainPhotoUrls, maskUrls, availableTileIndices, tilesLoaded, photoIndex]);
 
   // Регенерируем мозаику при смене параметров
   // Генерируем мозаику только после загрузки и проверки всех тайлов
@@ -2120,24 +1577,18 @@ function App() {
     }
 
     const interval = setInterval(() => {
-      setTransitioning(true);
-
       setTimeout(() => {
         setCurrentMainIndex(prev => (prev + 1) % slideshowPhotos.length);
-        setTimeout(() => {
-          setTransitioning(false);
-        }, 100);
       }, 500);
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [loading, slideshowPhotos.length, autoPlay]);
+  }, [loading, slideshowPhotos.length, autoPlay, debugMode]);
 
   // Функция для переключения слайда
   const changeSlide = useCallback((direction) => {
     if (slideshowPhotos.length === 0) return;
     
-    setTransitioning(true);
     setTimeout(() => {
       let newIndex;
       if (direction === 'next') {
@@ -2156,12 +1607,8 @@ function App() {
         params.set('photo', baseName);
         window.history.pushState({}, '', `${window.location.pathname}?${params.toString()}`);
       }
-      
-      setTimeout(() => {
-        setTransitioning(false);
-      }, 100);
     }, 500);
-  }, [slideshowPhotos.length, currentMainIndex]);
+  }, [slideshowPhotos, currentMainIndex]);
 
   // Генерация мозаики в высоком разрешении для печати
   const downloadHighRes = useCallback(async () => {
@@ -2181,7 +1628,6 @@ function App() {
       
       // Используем кэшированный URL если доступен
       const currentPhoto = slideshowPhotos[currentMainIndex];
-      const photoUrl = currentPhoto ? `/photos/${currentPhoto.filename}` : mainImageUrl;
       const cachedPhotoUrl = currentPhoto && mainPhotoUrls[currentPhoto.filename] 
         ? mainPhotoUrls[currentPhoto.filename] 
         : mainImageUrl;
@@ -2192,8 +1638,6 @@ function App() {
         mainImg.src = cachedPhotoUrl;
       });
       
-      // Вычисляем пропорции основного изображения
-      const imgAspect = mainImg.naturalWidth / mainImg.naturalHeight;
       
       // Используем размер основного изображения в контейнере (mainImageSize) для правильного масштабирования
       // Масштабируем mainImageSize с сохранением пропорций
@@ -2213,7 +1657,7 @@ function App() {
       const highResCtx = highResCanvas.getContext('2d');
       
       // Загружаем и рисуем все тайлы (используем кэш)
-      const tilePromises = tiles.map(async (tile, index) => {
+      const tilePromises = tiles.map(async (tile, _index) => {
         const tileImg = new Image();
         tileImg.crossOrigin = 'anonymous';
         
@@ -2373,13 +1817,12 @@ function App() {
       console.error('Ошибка генерации высокого разрешения:', error);
       setIsGeneratingHighRes(false);
     }
-  }, [tiles, mainImageUrl, containerSize, images, slideshowPhotos, currentMainIndex, debugMode, isGeneratingHighRes, MIN_OPACITY, mainPhotoUrls, mainImageSize, maskImageUrl]);
+  }, [tiles, mainImageUrl, containerSize, images, slideshowPhotos, currentMainIndex, isGeneratingHighRes, mainPhotoUrls, mainImageSize]);
 
   // Ручной выбор основного фото
   const handleIndicatorClick = (index) => {
     if (index === currentMainIndex) return;
 
-    setTransitioning(true);
     setTimeout(() => {
       setCurrentMainIndex(index);
       
@@ -2391,10 +1834,6 @@ function App() {
         params.set('photo', baseName);
         window.history.pushState({}, '', `${window.location.pathname}?${params.toString()}`);
       }
-      
-      setTimeout(() => {
-        setTransitioning(false);
-      }, 100);
     }, 500);
   };
 
