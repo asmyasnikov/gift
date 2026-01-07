@@ -159,43 +159,6 @@ function maskDataToDataUrl(maskData, containerSize, mainImageSize, tileSize = 0)
 }
 
 
-// Создает маску для главного изображения из исходного URL маски PNG
-// Масштабирует маску до размера главного изображения без расширения
-// Прозрачные части маски = тайлы видны, непрозрачные части = тайлы не видны
-async function createMainImageMaskFromUrl(maskUrl, mainImageSize) {
-  if (!maskUrl || mainImageSize.width <= 0 || mainImageSize.height <= 0) {
-    return null;
-  }
-  
-  try {
-    // Загружаем исходную маску PNG (само главное фото)
-    const maskImg = new Image();
-    maskImg.crossOrigin = 'anonymous';
-    
-    await new Promise((resolve, reject) => {
-      maskImg.onload = resolve;
-      maskImg.onerror = reject;
-      maskImg.src = maskUrl;
-    });
-    
-    // Создаем canvas размером главного изображения
-    const canvas = document.createElement('canvas');
-    canvas.width = mainImageSize.width;
-    canvas.height = mainImageSize.height;
-    const ctx = canvas.getContext('2d');
-    
-    // Рисуем маску, масштабируя до размера главного изображения
-    // Без инверсии - прозрачные части = тайлы видны, непрозрачные = тайлы не видны
-    ctx.drawImage(maskImg, 0, 0, mainImageSize.width, mainImageSize.height);
-    
-    // Конвертируем в data URL
-    return canvas.toDataURL('image/png');
-  } catch (error) {
-    console.error('[ERROR] Ошибка создания маски для главного изображения:', error);
-    return null;
-  }
-}
-
 // Проверяет, является ли пиксель прозрачным в маске
 function isTransparentInMask(x, y, maskData) {
   if (!maskData || !maskData.imageData) {
@@ -1107,7 +1070,6 @@ function App() {
   const [autoPlay, setAutoPlay] = useState(false);
   const [maskData, setMaskData] = useState(null);
   const [maskImageUrl, setMaskImageUrl] = useState(null); // Data URL маски для CSS mask-image
-  const [mainImageMaskUrl, setMainImageMaskUrl] = useState(null); // URL исходной маски PNG для главного изображения
   const [debugMode, setDebugMode] = useState(false);
   const [isGeneratingHighRes, setIsGeneratingHighRes] = useState(false);
   const [hoveredTileIndex, setHoveredTileIndex] = useState(null);
@@ -2053,21 +2015,8 @@ function App() {
       const maskUrl = maskDataToDataUrl(currentMaskData, containerSize, localMainImageSize, d_описанная);
       setMaskImageUrl(maskUrl);
       
-      // Создаем маску для главного изображения из исходного PNG (без расширения)
-      // PNG файл сам является маской
-      const originalMaskUrl = maskUrls[currentPhoto.filename] || `/photos/${currentPhoto.filename}`;
-      
-      // Асинхронно создаем масштабированную маску для главного изображения
-      try {
-        const mainMaskDataUrl = await createMainImageMaskFromUrl(originalMaskUrl, localMainImageSize);
-        setMainImageMaskUrl(mainMaskDataUrl);
-      } catch (error) {
-        console.error('[ERROR] Ошибка создания маски для главного изображения:', error);
-        setMainImageMaskUrl(null);
-      }
     } else {
       setMaskImageUrl(null);
-      setMainImageMaskUrl(null);
     }
     
     setTiles(newTiles);
