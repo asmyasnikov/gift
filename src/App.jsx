@@ -5,9 +5,6 @@ import { config } from '@/config.js';
 // Максимальный размер канваса для анализа (по большей стороне)
 const MAX_CANVAS_SIZE = 512;
 
-// Константы для opacity тайлов
-const MAX_OPACITY = 1.0;  // Максимальная прозрачность (тайлы видны над прозрачными частями PNG маски)
-
 
 // Константа для увеличения тайла при наведении/клике
 const TILE_HOVER_SCALE = 5; // Масштаб увеличения тайла (1.0 = без увеличения, 2.0 = в 2 раза, и т.д.)
@@ -22,134 +19,6 @@ const HEXAGON_HORIZONTAL_SPACING_MULTIPLIER = Math.sqrt(3)+0.05;
 const HEXAGON_VERTICAL_SPACING_MULTIPLIER = 1.55;
 
 
-// Загрузка маски для фото
-// Маска - это PNG файл с альфа-каналом (само главное фото)
-// Прозрачные области = тайлы видны, непрозрачные области = тайлы не видны
-async function loadMask(maskFilename, canvasWidth, canvasHeight, containerSize, maskUrl = null) {
-  try {
-    const maskImg = new Image();
-    maskImg.crossOrigin = 'anonymous';
-    
-    // Используем переданный URL или формируем стандартный
-    const url = maskUrl || `/photos/${maskFilename}`;
-    
-    await new Promise((resolve, reject) => {
-      maskImg.onload = resolve;
-      maskImg.onerror = reject;
-      maskImg.src = url;
-    });
-    
-    // Создаём canvas для маски с размером контейнера
-    const maskCanvas = document.createElement('canvas');
-    maskCanvas.width = containerSize.width;
-    maskCanvas.height = containerSize.height;
-    const maskCtx = maskCanvas.getContext('2d');
-    
-    // Рисуем маску на canvas контейнера (масштабируем)
-    maskCtx.drawImage(maskImg, 0, 0, containerSize.width, containerSize.height);
-    
-    // Получаем imageData для точной проверки пикселей
-    const maskImageData = maskCtx.getImageData(0, 0, containerSize.width, containerSize.height);
-    
-    return {
-      imageData: maskImageData,
-      width: containerSize.width,
-      height: containerSize.height
-    };
-  } catch (error) {
-    return null;
-  }
-}
-
-
-// Конвертирует maskData в data URL для использования в CSS mask-image
-// Расширяет маску на всю область тайлов (включая дополнительные области по краям на 1 тайл)
-// В CSS mask-image: прозрачные части маски = элемент виден, непрозрачные части = элемент скрыт
-// PNG прозрачен (alpha = 0) -> маска прозрачна (alpha = 0) -> тайлы видны
-// PNG непрозрачен (alpha = 255) -> маска непрозрачна (alpha = 255) -> тайлы скрыты
-// tileSize - размер тайла (диаметр описанной окружности) для расширения маски
-function maskDataToDataUrl(maskData, containerSize, mainImageSize, tileSize = 0) {
-  if (!maskData || !maskData.imageData) {
-    return null;
-  }
-  
-  try {
-    // Шаг 1: Создаем canvas размером контейнера
-    const canvas = document.createElement('canvas');
-    canvas.width = containerSize.width;
-    canvas.height = containerSize.height;
-    const ctx = canvas.getContext('2d');
-    
-    // Заливаем весь canvas непрозрачным белым (alpha = 255)
-    // В CSS mask-image: прозрачные части = элемент виден, непрозрачные = элемент скрыт
-    // Область вокруг главного фото должна быть прозрачной -> тайлы видны везде
-    ctx.fillStyle = 'white';
-    ctx.fillRect(0, 0, containerSize.width, containerSize.height);
-    
-    // Создаем временный canvas для маски
-    const maskCanvas = document.createElement('canvas');
-    maskCanvas.width = maskData.width;
-    maskCanvas.height = maskData.height;
-    const maskCtx = maskCanvas.getContext('2d');
-    
-    // Рисуем маску на временном canvas (БЕЗ инверсии)
-    // PNG прозрачен (alpha = 0) -> маска прозрачна (alpha = 0) -> тайлы видны
-    // PNG непрозрачен (alpha = 255) -> маска непрозрачна (alpha = 255) -> тайлы скрыты
-    maskCtx.putImageData(maskData.imageData, 0, 0);
-    
-    // Рисуем маску в позиции главного фото на основном canvas
-    // Используем destination-out чтобы вырезать прозрачные части из белого фона
-    // Это создаст прозрачные области там, где PNG прозрачен
-    ctx.save();
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.drawImage(
-      maskCanvas,
-      mainImageSize.x,
-      mainImageSize.y,
-      mainImageSize.width,
-      mainImageSize.height
-    );
-    ctx.restore();
-    
-    // Шаг 2.5: Расширяем маску на всю область тайлов (включая дополнительные области по краям на 1 тайл)
-    // Без заливки белым - просто расширяем область, копируя края маски
-    if (tileSize > 0) {
-      // Убеждаемся, что mainImageSize.width и mainImageSize.height - целые числа
-      const maskWidth = Math.floor(mainImageSize.width);
-      const maskHeight = Math.floor(mainImageSize.height);
-      
-      // Получаем imageData области маски с целыми размерами (для возможного расширения в будущем)
-      ctx.getImageData(
-        Math.floor(mainImageSize.x),
-        Math.floor(mainImageSize.y),
-        maskWidth,
-        maskHeight
-      );
-      
-      // Расширяем на 1 тайл по всем краям, но не больше размера маски
-      // Убеждаемся, что expansion - целое число
-      const expansion = Math.floor(Math.min(tileSize, Math.min(maskWidth, maskHeight)));
-      
-      // Проверяем, что expansion > 0
-      if (expansion <= 0) {
-        // Если expansion <= 0, пропускаем расширение
-        // Маска уже нарисована, расширенные области остаются прозрачными
-        return canvas.toDataURL('image/png');
-      }
-      
-      // Расширяем маску на всю область тайлов
-      // Расширенные части должны быть прозрачными (тайлы видны)
-      // Поэтому мы НЕ копируем края маски, а оставляем расширенные области прозрачными
-      // Расширенные области уже прозрачны (clearRect), поэтому ничего не делаем
-    }
-    
-    // Конвертируем в data URL
-    return canvas.toDataURL('image/png');
-  } catch (error) {
-    console.error('[ERROR] Ошибка конвертации maskData в data URL:', error);
-    return null;
-  }
-}
 
 
 
@@ -541,13 +410,11 @@ function App() {
   const [mainImageSize, setMainImageSize] = useState({ width: 0, height: 0, x: 0, y: 0 });
   const [mainImageUrl, setMainImageUrl] = useState(null);
   const [autoPlay, setAutoPlay] = useState(false);
-  const [maskImageUrl, setMaskImageUrl] = useState(null); // Data URL маски для CSS mask-image
   const [debugMode, setDebugMode] = useState(false);
   const [isGeneratingHighRes, setIsGeneratingHighRes] = useState(false);
   const [hoveredTileIndex, setHoveredTileIndex] = useState(null);
   const [tileImageUrls, setTileImageUrls] = useState({}); // Кэш URL'ов тайлов (объект для React state)
   const [mainPhotoUrls, setMainPhotoUrls] = useState({}); // Кэш URL'ов главных фото
-  const [maskUrls, setMaskUrls] = useState({}); // Кэш URL'ов масок
   const [availableTileIndices, setAvailableTileIndices] = useState(new Set()); // Индексы фото, для которых есть тайлы
   const [tilesLoaded, setTilesLoaded] = useState(false); // Флаг, что все тайлы загружены и проверены
 
@@ -652,28 +519,23 @@ function App() {
 
     const preloadMainPhotos = async () => {
       const newMainPhotoUrls = {};
-      const newMaskUrls = {};
       
       if (debugMode) {
-        console.log('[DEBUG] Начинаем предзагрузку главных фото и масок:', {
+        console.log('[DEBUG] Начинаем предзагрузку главных фото:', {
           count: slideshowPhotos.length
         });
       }
 
       // Загружаем все главные фото (PNG файлы) параллельно
-      // PNG файл сам является маской
       const loadPromises = slideshowPhotos.map(async (photo) => {
         const photoUrl = `/photos/${photo.filename}`;
         
         // Используем прямые URL - браузер сам закэширует изображения
         newMainPhotoUrls[photo.filename] = photoUrl;
-        // PNG файл сам является маской
-        newMaskUrls[photo.filename] = photoUrl;
       });
       
       await Promise.all(loadPromises);
       setMainPhotoUrls(newMainPhotoUrls);
-      setMaskUrls(newMaskUrls);
       
       if (debugMode) {
         console.log('[DEBUG] Предзагрузка главных фото (PNG) завершена:', {
@@ -1112,46 +974,13 @@ function App() {
     
     // Уменьшаем главное фото на размер грани `a`, чтобы минимум один ряд сот был вокруг
     // Уменьшаем ширину и высоту на `a`, и центрируем
-    mainImgWidth = Math.max(0, originalMainImgWidth - a);
-    mainImgHeight = Math.max(0, originalMainImgHeight - a);
+    mainImgWidth = Math.max(0, originalMainImgWidth);
+    mainImgHeight = Math.max(0, originalMainImgHeight);
     mainImgX = (containerSize.width - mainImgWidth) / 2;
     mainImgY = (containerSize.height - mainImgHeight) / 2;
     
     // Обновляем размер главного фото в состоянии
     setMainImageSize({ width: mainImgWidth, height: mainImgHeight, x: mainImgX, y: mainImgY });
-    
-    // Загружаем маску (PNG файл сам является маской)
-    // Масштабируем маску до размера уменьшенного главного фото
-    let currentMaskData = null;
-    try {
-      // Используем уменьшенные размеры главного фото для маски
-      const maskSize = { width: mainImgWidth, height: mainImgHeight };
-      // Используем кэшированный URL маски если доступен (PNG файл сам является маской)
-      const maskUrl = `/photos/${currentPhoto.filename}`;
-      const cachedMaskUrl = maskUrls[currentPhoto.filename] || maskUrl;
-      const mask = await loadMask(currentPhoto.filename, canvasWidth, canvasHeight, maskSize, cachedMaskUrl);
-      if (mask && mask.imageData) {
-        currentMaskData = mask;
-        if (debugMode) {
-          console.log('[DEBUG] Маска загружена (PNG файл):', {
-            filename: currentPhoto.filename,
-            width: mask.width,
-            height: mask.height,
-            fromCache: !!maskUrls[currentPhoto.filename]
-          });
-        }
-      } else {
-        // Маска не найдена - это не должно быть в слайд-шоу
-        if (debugMode) {
-          console.log('[DEBUG] Маска не найдена при генерации мозаики:', currentPhoto.filename);
-        }
-      }
-    } catch (e) {
-      // Маска не найдена - это не должно быть в слайд-шоу
-      if (debugMode) {
-        console.log('[DEBUG] Ошибка загрузки маски для:', currentPhoto.filename);
-      }
-    }
     
     if (debugMode) {
       console.log('[DEBUG] Вычисление параметров шестиугольной сетки:', {
@@ -1274,10 +1103,6 @@ function App() {
         const tileWidth = maxX - minX;
         const tileHeight = maxY - minY;
         
-        // Вычисляем opacity
-        // Маска применяется напрямую через CSS mask-image, поэтому не нужно вычислять opacity на основе маски
-        let opacity = MAX_OPACITY; // По умолчанию максимальная прозрачность
-        
         allTiles.push({
           x: minX,
           y: minY,
@@ -1289,7 +1114,7 @@ function App() {
           vertices: vertices,
           imageIndex: bestIndex,
           avgColor: tileColor,
-          opacity,
+          opacity: 1.0, // Тайлы всегда рисуются с полной непрозрачностью
           isOnMainImage, // Сохраняем информацию о том, попадает ли тайл на главное фото
         });
       } catch (error) {
@@ -1464,20 +1289,8 @@ function App() {
       }
     }
     
-    // Конвертируем maskData в data URL для CSS mask-image
-    // Расширяем маску на весь контейнер
-    if (currentMaskData && mainImgWidth > 0 && mainImgHeight > 0) {
-      const localMainImageSize = { width: mainImgWidth, height: mainImgHeight, x: mainImgX, y: mainImgY };
-      // Передаем размер тайла (диаметр описанной окружности) для расширения маски вниз
-      const maskUrl = maskDataToDataUrl(currentMaskData, containerSize, localMainImageSize, d_описанная);
-      setMaskImageUrl(maskUrl);
-      
-    } else {
-      setMaskImageUrl(null);
-    }
-    
     setTiles(newTiles);
-  }, [images, photoColors, slideshowPhotos, currentMainIndex, containerSize, debugMode, mainPhotoUrls, maskUrls, availableTileIndices, tilesLoaded, photoIndex]);
+  }, [images, photoColors, slideshowPhotos, currentMainIndex, containerSize, debugMode, mainPhotoUrls, availableTileIndices, tilesLoaded, photoIndex]);
 
   // Регенерируем мозаику при смене параметров
   // Генерируем мозаику только после загрузки и проверки всех тайлов
@@ -1888,23 +1701,6 @@ function App() {
             position: 'relative'
           }}
         >
-        {mainImageUrl && mainImageSize.width > 0 && (
-          <img
-            src={mainImageUrl}
-            alt="Main photo"
-            className="main-photo"
-            style={{
-              position: 'absolute',
-              left: mainImageSize.x,
-              top: mainImageSize.y,
-              width: mainImageSize.width,
-              height: mainImageSize.height,
-              objectFit: 'contain',
-              zIndex: 2,
-              // PNG уже готов как есть, маска не нужна
-            }}
-          />
-        )}
         <div 
           className="mosaic-tiles"
           style={{
@@ -1913,17 +1709,6 @@ function App() {
             height: containerSize.height,
             overflow: hoveredTileIndex !== null ? 'visible' : 'visible', // Разрешаем видимость для нижнего ряда
             overflowY: 'visible', // Разрешаем видимость по вертикали
-            // Применяем расширенную маску ко всей области тайлов
-            ...(maskImageUrl ? {
-              maskImage: `url(${maskImageUrl})`,
-              maskSize: '100% 100%',
-              maskPosition: '0 0',
-              maskRepeat: 'no-repeat',
-              WebkitMaskImage: `url(${maskImageUrl})`,
-              WebkitMaskSize: '100% 100%',
-              WebkitMaskPosition: '0 0',
-              WebkitMaskRepeat: 'no-repeat',
-            } : {})
           }}
           onClick={(e) => {
             // Сбрасываем активный тайл при клике вне тайла (только для мобильных)
@@ -2026,6 +1811,13 @@ function App() {
             }
           }}
         >
+          {mainImageUrl && mainImageSize.width > 0 && (
+            <img
+              src={mainImageUrl}
+              alt="Main photo"
+              className="main-photo"
+            />
+          )}
           {(() => {
             // Собираем статистику о пропущенных тайлах
             const skippedTiles = [];
