@@ -20,33 +20,9 @@ async function getImageMetadata(filePath) {
     const image = sharp(filePath);
     const metadata = await image.metadata();
     
-    // Получаем средний цвет, уменьшая изображение до 1x1
-    const { data } = await image
-      .resize(1, 1, { fit: 'cover' })
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    
-    // Получаем статистику для анализа
-    const stats = await sharp(filePath).stats();
-    
-    // Вычисляем яркость
-    const brightness = (data[0] * 0.299 + data[1] * 0.587 + data[2] * 0.114) / 255;
-    
-    // Контраст из стандартного отклонения
-    const { channels } = stats;
-    const avgStdDev = channels.reduce((sum, ch) => sum + ch.stdev, 0) / channels.length;
-    
     return {
       width: metadata.width,
-      height: metadata.height,
-      avgColor: {
-        r: data[0],
-        g: data[1],
-        b: data[2]
-      },
-      brightness,
-      contrast: avgStdDev / 128,
-      aspectRatio: metadata.width / metadata.height
+      height: metadata.height
     };
   } catch (error) {
     console.error(`Ошибка обработки ${filePath}:`, error.message);
@@ -106,9 +82,6 @@ async function indexPhotos() {
         filename: file,
         width: metadata.width,
         height: metadata.height,
-        avgColor: metadata.avgColor,
-        brightness: Math.round(metadata.brightness * 100) / 100,
-        contrast: Math.round(metadata.contrast * 100) / 100,
         notes: isExcluded ? 'Исключено по паттерну' : ''
       });
     }
